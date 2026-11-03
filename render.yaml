@@ -1,7 +1,26 @@
 services:
+  - type: pserv
+    name: medbot-mysql
+    runtime: docker
+    repo: https://github.com/render-examples/mysql
+    plan: starter
+    disk:
+      name: mysql-data
+      mountPath: /var/lib/mysql
+      sizeGB: 10
+    envVars:
+      - key: MYSQL_DATABASE
+        value: medbot
+      - key: MYSQL_USER
+        value: medbot
+      - key: MYSQL_PASSWORD
+        generateValue: true
+      - key: MYSQL_ROOT_PASSWORD
+        generateValue: true
+
   - type: web
     name: medbot
-    env: docker
+    runtime: docker
     plan: starter
     autoDeploy: true
     dockerfilePath: ./Dockerfile
@@ -11,12 +30,18 @@ services:
       - key: PORT
         value: 10000
       - key: DB_HOST
-        sync: false
+        fromService:
+          type: pserv
+          name: medbot-mysql
+          property: host
       - key: DB_PORT
         value: 3306
       - key: DB_NAME
-        sync: false
+        value: medbot
       - key: DB_USER
-        sync: false
+        value: medbot
       - key: DB_PASS
-        sync: false
+        fromService:
+          type: pserv
+          name: medbot-mysql
+          envVarKey: MYSQL_PASSWORD
