@@ -100,5 +100,3 @@ mysql --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASS
 - The application expects a MySQL-backed backend and will fail without the database schema loaded.
 - The app is best suited for a simple PHP hosting environment or a Render web service paired with a managed MySQL database.
 
-## License
-This project is provided as-is for educational or internal operational use.
