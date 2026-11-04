@@ -5,6 +5,12 @@ function renderHead(string $title, string $active = 'dashboard'): void {
     $db = getDB();
     // Count unresolved alerts for badge
     $alertCount = $db->query("SELECT COUNT(*) FROM interaction_alerts WHERE resolved=0")->fetch_row()[0] ?? 0;
+    // Count new patient symptom reports for badge (table is created the first time the symptoms API runs)
+    $symCount = 0;
+    try {
+        $sr = $db->query("SELECT COUNT(*) FROM symptom_reports WHERE status='new'");
+        if ($sr) { $symCount = (int) ($sr->fetch_row()[0] ?? 0); }
+    } catch (Throwable $e) { $symCount = 0; }
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -16,10 +22,33 @@ function renderHead(string $title, string $active = 'dashboard'): void {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/medbot/assets/style.css">
+<style>
+/* ── Phone fixes ── */
+.menu-btn{display:none;background:var(--bg-3);border:1px solid var(--border-grey);color:var(--text-1);width:40px;height:40px;border-radius:10px;font-size:20px;line-height:1;cursor:pointer;flex-shrink:0}
+.sidebar-backdrop{display:none}
+@media(max-width:900px){
+    .menu-btn{display:inline-flex;align-items:center;justify-content:center}
+    .sidebar{box-shadow:var(--shadow-lg)}
+    .sidebar-backdrop.show{display:block;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:90}
+    .topbar{height:auto;min-height:62px;flex-wrap:wrap;gap:8px;padding:8px 12px}
+    .topbar-left{min-width:0;flex:1}
+    .topbar-title{font-size:15px}
+    .page-content{padding-bottom:96px !important}
+}
+@media(max-width:600px){
+    #topbar-robot-status{display:none !important}
+    .topbar-sub{display:none}
+    .topbar-right .btn{padding:7px 11px;font-size:12px}
+    #toast-container{bottom:auto;top:72px;left:12px;right:12px}
+    .toast{min-width:0;max-width:none}
+    .voice-interface{bottom:16px;right:16px}
+}
+</style>
 </head>
 <body>
 <div id="toast-container"></div>
 <div class="layout">
+<div class="sidebar-backdrop" id="sidebar-backdrop"></div>
 <aside class="sidebar">
     <div class="sidebar-logo">
         <div class="logo-icon">🤖</div>
@@ -51,6 +80,10 @@ function renderHead(string $title, string $active = 'dashboard'): void {
             <a href="/medbot/patients.php" class="<?= $active==='patients'?'active':'' ?>">
                 <span class="nav-icon">👥</span> Patients
             </a>
+            <a href="/medbot/symptoms.php" class="<?= $active==='symptoms'?'active':'' ?>">
+                <span class="nav-icon">🩺</span> Symptoms
+                <?php if ($symCount > 0): ?><span class="nav-badge"><?= $symCount ?></span><?php endif; ?>
+            </a>
             <a href="/medbot/alerts.php" class="<?= $active==='alerts'?'active':'' ?>">
                 <span class="nav-icon">⚠️</span> Alerts
                 <?php if ($alertCount > 0): ?><span class="nav-badge"><?= $alertCount ?></span><?php endif; ?>
@@ -73,6 +106,7 @@ function renderHead(string $title, string $active = 'dashboard'): void {
 function renderTopbar(string $title, string $sub = ''): void { ?>
 <header class="topbar">
     <div class="topbar-left">
+        <button type="button" class="menu-btn" id="menu-btn" aria-label="Open menu" aria-expanded="false">☰</button>
         <div>
             <div class="topbar-title"><?= htmlspecialchars($title) ?></div>
             <?php if ($sub): ?><div class="topbar-sub"><?= htmlspecialchars($sub) ?></div><?php endif; ?>
@@ -96,7 +130,7 @@ function renderFoot(): void { ?>
         <div class="voice-bubble-q" id="voice-q">You said: <span id="voice-heard"></span></div>
         <div class="voice-bubble-a" id="voice-answer">🤖 Listening...</div>
     </div>
-    <button class="voice-btn" id="voice-btn" title="Ask MedBot a question" onclick="toggleVoice()">🎙️</button>
+    <button class="voice-btn" id="voice-btn" title="Talk to MedBot: report symptoms or ask about medicines" aria-label="Talk to MedBot" onclick="toggleVoice()">🎙️</button>
 </div>
 </div><!-- .main -->
 </div><!-- .layout -->
@@ -116,6 +150,21 @@ function showToast(msg, type='info', dur=3500){
 function openModal(id){document.getElementById(id)?.classList.add('open')}
 function closeModal(id){document.getElementById(id)?.classList.remove('open')}
 document.querySelectorAll('.modal-overlay').forEach(o=>o.addEventListener('click',e=>{if(e.target===o)o.classList.remove('open')}));
+
+// Phone menu: open/close the sidebar
+(function(){
+    const btn=document.getElementById('menu-btn'), sb=document.querySelector('.sidebar'), bd=document.getElementById('sidebar-backdrop');
+    if(!btn||!sb) return;
+    function setOpen(o){
+        sb.classList.toggle('open',o);
+        if(bd) bd.classList.toggle('show',o);
+        btn.setAttribute('aria-expanded',o?'true':'false');
+    }
+    btn.addEventListener('click',()=>setOpen(!sb.classList.contains('open')));
+    if(bd) bd.addEventListener('click',()=>setOpen(false));
+    sb.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>setOpen(false)));
+    document.addEventListener('keydown',e=>{if(e.key==='Escape')setOpen(false)});
+})();
 </script>
 </body>
 </html>
