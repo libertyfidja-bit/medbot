@@ -240,3 +240,29 @@ table.dt tr:last-child td{border-bottom:none}
 
 /* ── RESPONSIVE ── */
 @media(max-width:900px){.grid-2,.grid-3{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.sidebar{position:fixed;z-index:100;transform:translateX(-100%);transition:transform .3s}.sidebar.open{transform:translateX(0)}.topbar{padding:0 16px}.page-content{padding:14px}}
+
+/* ── PAGE SCROLL FIX: Robot View & Navigation Map ── */
+.page-content > div[style*="calc(100vh"] {
+    height: auto !important;
+    align-items: start;
+}
+.page-content > div[style*="calc(100vh"] > div[style*="overflow-y:auto"] {
+    overflow: visible !important;
+}
+.page-content > div[style*="calc(100vh"] > div[style*="overflow-y:auto"] > .card {
+    flex: 0 0 auto !important;
+}
+.page-content > div[style*="calc(100vh"] > .card:first-child {
+    position: sticky !important;
+    top: 78px;
+    height: calc(100vh - 100px);
+    min-height: 420px;
+}
+@media (max-width: 900px) {
+    .page-content > div[style*="calc(100vh"] { grid-template-columns: 1fr !important; }
+    .page-content > div[style*="calc(100vh"] > .card:first-child {
+        position: relative !important;
+        top: auto;
+        height: 60vh;
+    }
+}
