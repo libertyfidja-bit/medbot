@@ -16,12 +16,6 @@ function renderHead(string $title, string $active = 'dashboard'): void {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/medbot/assets/style.css">
-<style>
-   /* Allow the page to scroll on every screen */
-   html, body { height: auto !important; min-height: 100%; overflow-y: auto !important; }
-   .layout { height: auto !important; min-height: 100vh; overflow: visible !important; }
-   .main, .page-content { height: auto !important; max-height: none !important; overflow: visible !important; }
-   </style>
 </head>
 <body>
 <div id="toast-container"></div>
