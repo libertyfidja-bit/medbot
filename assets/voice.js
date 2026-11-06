@@ -76,7 +76,7 @@ const voiceBot = (() => {
         rw: {
             title: "🎙️ MedBot Ijwi", tabSymptoms: "🩺 Bwira ibimenyetso", tabAsk: "💊 Baza ku miti",
             langLabel: "Ururimi uvuga",
-            rwHint: "Kumva Ikinyarwanda bishobora kudakora neza kuri telefoni zimwe. Niba amagambo atari yo, yandike mu kazu kari hepfo.",
+            rwHint: "",
             idleSymptoms: "Kanda mikoro maze uvuge uko wumva umeze.", idleAsk: "Kanda mikoro maze ubaze ikibazo cyawe.",
             listeningSymptoms: "Ndakumva… vuga uko wumva umeze.", listeningAsk: "Ndakumva… baza ikibazo cyawe.",
             who: "Ni nde uvuga?", choosePatient: "— Hitamo izina ryawe —", loadingPatients: "Biraza…",
@@ -108,8 +108,9 @@ const voiceBot = (() => {
 
     let built = false;
     let mode = 'symptoms';          // 'symptoms' | 'ask'
-    // Kinyarwanda is the default for a Rwandan hospital; a patient's own choice is remembered.
-    let lang = store.get('medbot_lang') || 'rw-RW';
+    // English is the default until Kinyarwanda recognition is confirmed to work on your phones.
+    // A patient's own choice is remembered.
+    let lang = store.get('medbot_lang') || 'en-US';
     let recognition = null;
     let listening = false;
     let keepListening = false;
@@ -245,7 +246,7 @@ const voiceBot = (() => {
 
         const langSel = $('vp-lang');
         LANGS.forEach(([code, name]) => langSel.add(new Option(name, code)));
-        if (!LANGS.some(l => l[0] === lang)) lang = 'rw-RW';
+        if (!LANGS.some(l => l[0] === lang)) lang = 'en-US';
         langSel.value = lang;
 
         // Events
