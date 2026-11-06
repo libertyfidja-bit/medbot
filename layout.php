@@ -80,7 +80,7 @@ function renderHead(string $title, string $active = 'dashboard'): void {
             <a href="/medbot/patients.php" class="<?= $active==='patients'?'active':'' ?>">
                 <span class="nav-icon">👥</span> Patients
             </a>
-            <a href="/medbot/symptoms.php" class="<?= $active==='symptoms'?'active':'' ?>">
+            <a href="/medbot/symptom-reports.php" class="<?= $active==='symptoms'?'active':'' ?>">
                 <span class="nav-icon">🩺</span> Symptoms
                 <?php if ($symCount > 0): ?><span class="nav-badge"><?= $symCount ?></span><?php endif; ?>
             </a>
