@@ -48,6 +48,8 @@ const voiceBot = (() => {
             noSpeech: "I did not hear anything. Tap the microphone to try again.", startFail: "Could not start the microphone. Please try again.",
             sendFail: "Please try again or call a nurse.", toastUrgent: "🚨 Urgent report sent to the care team", toastOk: "✅ Report sent to the care team",
             closeAria: "Close", micAria: "Start or stop the microphone",
+            micOn: "Microphone is on. Start speaking…", hearing: "Hearing sound…", speechDetected: "Speech detected — writing it down…",
+            noSound: "No sound is reaching the microphone. Check that the right microphone is selected, not muted, and not used by another app.",
         },
         fr: {
             title: "🎙️ Voix MedBot", tabSymptoms: "🩺 Signaler des symptômes", tabAsk: "💊 Questions sur les médicaments",
@@ -71,6 +73,8 @@ const voiceBot = (() => {
             noSpeech: "Je n’ai rien entendu. Appuyez sur le micro pour réessayer.", startFail: "Impossible de démarrer le micro. Réessayez.",
             sendFail: "Réessayez ou appelez une infirmière.", toastUrgent: "🚨 Signalement urgent envoyé à l’équipe soignante", toastOk: "✅ Signalement envoyé à l’équipe soignante",
             closeAria: "Fermer", micAria: "Démarrer ou arrêter le micro",
+            micOn: "Le micro est activé. Commencez à parler…", hearing: "Son détecté…", speechDetected: "Parole détectée — transcription en cours…",
+            noSound: "Aucun son n’arrive au micro. Vérifiez que le bon micro est choisi, qu’il n’est pas coupé et qu’aucune autre application ne l’utilise.",
         },
         // DRAFT Kinyarwanda — please have a Kinyarwanda-speaking nurse or doctor check these.
         rw: {
@@ -96,6 +100,8 @@ const voiceBot = (() => {
             noSpeech: "Sinumvise ijwi. Kanda mikoro ugerageze nanone.", startFail: "Mikoro ntiyashoboye gufungurwa. Ongera ugerageze.",
             sendFail: "Ongera ugerageze cyangwa uhamagare umuforomo.", toastUrgent: "🚨 Ubutumwa bwihutirwa bwoherejwe ku baganga", toastOk: "✅ Ubutumwa bwoherejwe ku baganga",
             closeAria: "Funga", micAria: "Fungura cyangwa ufunge mikoro",
+            micOn: "Mikoro irakora. Tangira uvuge…", hearing: "Ndumva ijwi…", speechDetected: "Mbonye amagambo — ndayandika…",
+            noSound: "Nta jwi rigera kuri mikoro. Reba ko mikoro ukoresha ari yo, itafunzwe, kandi nta yindi porogaramu iyikoresha.",
         },
     };
 
@@ -115,6 +121,8 @@ const voiceBot = (() => {
     let listening = false;
     let keepListening = false;
     let quietRestarts = 0;
+    let soundTimer = null;
+    let heardSound = false;
     let statusKind = 'idle';
     let usedVoice = false;
     let askUsed = false;
@@ -430,6 +438,16 @@ const voiceBot = (() => {
             setStatus(mode === 'symptoms' ? t('listeningSymptoms') : t('listeningAsk'), 'live');
         };
 
+        // Show what the microphone is doing, so problems are visible
+        recognition.onaudiostart = () => {
+            heardSound = false;
+            setStatus(t('micOn'), 'live');
+            clearTimeout(soundTimer);
+            soundTimer = setTimeout(() => { if (!heardSound && keepListening) setStatus(t('noSound'), 'warn'); }, 6000);
+        };
+        recognition.onsoundstart = () => { heardSound = true; clearTimeout(soundTimer); setStatus(t('hearing'), 'live'); };
+        recognition.onspeechstart = () => { heardSound = true; clearTimeout(soundTimer); setStatus(t('speechDetected'), 'live'); };
+
         recognition.onresult = e => {
             let interim = '', final = '';
             for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -449,6 +467,7 @@ const voiceBot = (() => {
         };
 
         recognition.onend = () => {
+            clearTimeout(soundTimer);
             listening = false;
             recognition = null;
             if (keepListening && mode === 'symptoms' && quietRestarts < 3) {
@@ -467,12 +486,13 @@ const voiceBot = (() => {
     }
 
     function stopListening() {
+        clearTimeout(soundTimer);
         keepListening = false;
         if (recognition) { try { recognition.stop(); } catch (e) { /* already stopped */ } }
         listening = false;
         setMicState(false);
         showInterim('');
-        if (statusKind === 'live') setStatus(idleText(), 'idle');
+        if (statusKind === 'live' || statusKind === 'warn') setStatus(idleText(), 'idle');
     }
 
     function handleFinal(text) {
