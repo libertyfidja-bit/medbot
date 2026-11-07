@@ -20,6 +20,7 @@
  * The robot_missions table is created automatically the first time this API runs.
  */
 require_once __DIR__ . '/../connect.php';
+require_once __DIR__ . '/../auth.php';
 mysqli_report(MYSQLI_REPORT_OFF);
 header('Cache-Control: no-store');
 
@@ -193,6 +194,12 @@ try {
     $db = getDB();
     mysqli_report(MYSQLI_REPORT_OFF);
     ensureTable($db);
+
+    $me = auth_user();
+    if (!$me) fail('Please sign in again.', 401);
+    if (!in_array($me['role'], AUTH_STAFF, true)) fail('Staff only.', 403);
+    $who = clean($me['full_name'] . ' (' . $me['role'] . ')', 100);
+
     tick($db);
 
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -239,7 +246,7 @@ try {
             $fromLabel = clean($in['from_label'] ?? $fromKey, 120);
             $toLabel   = clean($in['to_label'] ?? $toKey, 120);
             $note      = clean($in['note'] ?? '', 255);
-            $by        = clean($in['requested_by'] ?? '', 100);
+            $by        = $who;
 
             $stmt = run(
                 $db,
@@ -263,9 +270,9 @@ try {
             if ($method !== 'POST') fail('POST required.', 405);
             $id       = (int) ($in['id'] ?? 0);
             $decision = (string) ($in['decision'] ?? '');
-            $by       = clean($in['confirmed_by'] ?? '', 100);
+            $by       = $who;
             if (!in_array($decision, ['release', 'reject'], true)) fail('Decision must be release or reject.', 400);
-            if ($by === '') fail('Enter the doctor’s name to confirm.', 400);
+            if (!in_array($me['role'], ['doctor', 'admin'], true)) fail('Only a doctor can confirm or refuse the release.', 403);
 
             $m = one($db, 'SELECT * FROM robot_missions WHERE id = ?', 'i', [$id]);
             if (!$m) fail('Mission not found.', 404);

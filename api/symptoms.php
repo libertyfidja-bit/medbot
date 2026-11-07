@@ -12,6 +12,7 @@
  * The symptom_reports table is created automatically the first time this API runs.
  */
 require_once __DIR__ . '/../connect.php';
+require_once __DIR__ . '/../auth.php';
 mysqli_report(MYSQLI_REPORT_OFF);
 header('Cache-Control: no-store');
 
@@ -137,6 +138,10 @@ try {
     mysqli_report(MYSQLI_REPORT_OFF);
     ensureTable($db);
 
+    $me = auth_user();
+    if (!$me) fail('Please sign in again.', 401);
+    $isPatient = $me['role'] === 'patient';
+
     $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
     $in = [];
     if ($method === 'POST') {
@@ -149,7 +154,8 @@ try {
 
         case 'patients': {
             $out = [];
-            $res = $db->query('SELECT id, name, room_number FROM patients ORDER BY name');
+            $sql = 'SELECT id, name, room_number FROM patients' . ($isPatient ? ' WHERE id = ' . (int) $me['patient_id'] : '') . ' ORDER BY name';
+            $res = $db->query($sql);
             if ($res) {
                 while ($p = $res->fetch_assoc()) $out[] = ['id' => (int) $p['id'], 'name' => $p['name'], 'room_number' => $p['room_number']];
                 $res->free();
@@ -173,6 +179,10 @@ try {
             $dur = in_array($in['duration'] ?? '', DURATIONS, true) ? $in['duration'] : null;
 
             $pid = (int) ($in['patient_id'] ?? 0);
+            if ($isPatient) {
+                $pid = (int) $me['patient_id'];
+                if ($pid <= 0) fail('Your account is not linked to a patient record yet. Please ask a nurse.', 409);
+            }
             $pname = 'Unknown (no name chosen)';
             $room  = null;
             if ($pid > 0) {
@@ -202,6 +212,7 @@ try {
         }
 
         case 'list': {
+            if ($isPatient) fail('Not allowed.', 403);
             $view  = (($_GET['view'] ?? 'open') === 'resolved') ? 'resolved' : 'open';
             $where = $view === 'resolved' ? "status = 'resolved'" : "status <> 'resolved'";
             $order = $view === 'resolved'
@@ -228,12 +239,12 @@ try {
 
         case 'update': {
             if ($method !== 'POST') fail('POST required.', 405);
+            if ($isPatient) fail('Not allowed.', 403);
             $id       = (int) ($in['id'] ?? 0);
             $decision = (string) ($in['decision'] ?? '');
-            $by       = clean($in['handled_by'] ?? '', 100);
+            $by       = clean($me['full_name'] . ' (' . $me['role'] . ')', 100);
             $reply    = clean($in['reply'] ?? '', 1000);
             if (!in_array($decision, ['acknowledge', 'resolve'], true)) fail('Decision must be acknowledge or resolve.', 400);
-            if ($by === '') fail('Enter your name first.', 400);
 
             $r = one($db, 'SELECT * FROM symptom_reports WHERE id = ?', 'i', [$id]);
             if (!$r) fail('Report not found.', 404);
