@@ -1,8 +1,12 @@
 <?php
 require_once __DIR__ . '/connect.php';
+require_once __DIR__ . '/auth.php';
 
 function renderHead(string $title, string $active = 'dashboard'): void {
     $db = getDB();
+    $me = auth_user();
+    $role = $me['role'] ?? '';
+    $jsonFlags = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
     // Count unresolved alerts for badge
     $alertCount = $db->query("SELECT COUNT(*) FROM interaction_alerts WHERE resolved=0")->fetch_row()[0] ?? 0;
     // Count new patient symptom reports for badge (table is created the first time the symptoms API runs)
@@ -22,6 +26,7 @@ function renderHead(string $title, string $active = 'dashboard'): void {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/medbot/assets/style.css">
+<script>window.MEDBOT_ROLE = <?= json_encode($role, $jsonFlags) ?>; window.MEDBOT_USER = <?= json_encode($me['full_name'] ?? '', $jsonFlags) ?>;</script>
 <style>
 /* ── Phone fixes ── */
 .menu-btn{display:none;background:var(--bg-3);border:1px solid var(--border-grey);color:var(--text-1);width:40px;height:40px;border-radius:10px;font-size:20px;line-height:1;cursor:pointer;flex-shrink:0}
@@ -60,6 +65,9 @@ function renderHead(string $title, string $active = 'dashboard'): void {
     <div class="sidebar-section">
         <div class="sidebar-label">Main</div>
         <nav class="sidebar-nav">
+            <a href="/medbot/home.php" class="<?= $active==='home'?'active':'' ?>">
+                <span class="nav-icon">🏠</span> My workspace
+            </a>
             <a href="/medbot/" class="<?= $active==='dashboard'?'active':'' ?>">
                 <span class="nav-icon">📊</span> Dashboard
             </a>
@@ -91,12 +99,18 @@ function renderHead(string $title, string $active = 'dashboard'): void {
             <a href="/medbot/schedule.php" class="<?= $active==='schedule'?'active':'' ?>">
                 <span class="nav-icon">📅</span> Schedule
             </a>
+            <a href="/medbot/users.php" class="<?= $active==='users'?'active':'' ?>">
+                <span class="nav-icon">🔑</span> <?= $role === 'admin' ? 'Accounts' : 'Patient accounts' ?>
+            </a>
         </nav>
     </div>
     <div style="flex:1"></div>
     <div class="sidebar-footer">
         <div class="conn-dot"></div>
-        <span>MySQL connected</span>
+        <div style="min-width:0;flex:1;line-height:1.3">
+            <div style="color:var(--text-1);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><?= htmlspecialchars($me['full_name'] ?? '') ?></div>
+            <div style="font-size:11px"><?= htmlspecialchars(ucfirst($role)) ?> · <a href="/medbot/change_password.php" style="color:var(--accent)">password</a> · <a href="/medbot/logout.php" style="color:var(--accent)">sign out</a></div>
+        </div>
     </div>
 </aside>
 <div class="main">
@@ -117,7 +131,9 @@ function renderTopbar(string $title, string $sub = ''): void { ?>
             <div class="robot-dot" id="topbar-dot"></div>
             <span id="topbar-status-text" style="font-size:12.5px">Loading...</span>
         </div>
+        <?php $tbRole = auth_user()['role'] ?? ''; if (in_array($tbRole, ['doctor', 'admin'], true)): ?>
         <a href="/medbot/prescription.php" class="btn btn-primary">+ New Prescription</a>
+        <?php endif; ?>
     </div>
 </header>
 <?php

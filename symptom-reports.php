@@ -23,12 +23,7 @@ renderTopbar('Symptom Reports', 'What patients told MedBot, for nurses and docto
         <div class="stat-card"><div class="stat-icon">📋</div><div class="stat-value teal" id="sc-open">0</div><div class="stat-label">Open reports</div></div>
     </div>
 
-    <div class="card">
-        <div class="card-body">
-            <label class="form-label" for="sr-staff">Your name (recorded when you acknowledge or resolve)</label>
-            <input id="sr-staff" type="text" maxlength="100" placeholder="Nurse or doctor name" autocomplete="name">
-        </div>
-    </div>
+    <div style="font-size:12.5px;color:var(--text-3);margin-bottom:12px">Signed in as <strong style="color:var(--text-1)"><?= auth_h(auth_user()['full_name'] ?? '') ?></strong>. Your name is recorded when you acknowledge or resolve a report.</div>
 
     <div class="sr-tabs">
         <button class="btn btn-primary btn-sm" id="tab-open" type="button">Open reports</button>
@@ -53,8 +48,6 @@ renderTopbar('Symptom Reports', 'What patients told MedBot, for nurses and docto
     var DUR = { just_now: 'just now', today: 'since today', few_days: '2–3 days', week_plus: 'a week or more' };
     var LANG = { 'en-US': 'English', 'fr-FR': 'Français', 'sw-KE': 'Kiswahili', 'rw-RW': 'Kinyarwanda' };
 
-    try { $('sr-staff').value = localStorage.getItem('medbot_staff') || ''; } catch (e) {}
-    $('sr-staff').addEventListener('input', function () { try { localStorage.setItem('medbot_staff', this.value); } catch (e) {} });
 
     function ago(m) {
         if (m == null) return '';
@@ -104,6 +97,7 @@ renderTopbar('Symptom Reports', 'What patients told MedBot, for nurses and docto
         try {
             var res = await fetch(API + '?action=list&view=' + view, { cache: 'no-store' });
             var data = await res.json();
+            if (res.status === 401) { location.href = 'login.php'; return; }
             if (!res.ok || data.error) throw new Error(data.message || 'HTTP ' + res.status);
 
             $('sc-urgent').textContent = data.counts.urgent_open;
@@ -139,15 +133,13 @@ renderTopbar('Symptom Reports', 'What patients told MedBot, for nurses and docto
     $('sr-list').addEventListener('click', async function (e) {
         var b = e.target.closest('[data-act]');
         if (!b) return;
-        var name = $('sr-staff').value.trim();
-        if (!name) { if (typeof showToast === 'function') showToast('Enter your name first', 'warning'); $('sr-staff').focus(); return; }
         var cardEl = b.closest('.sr-card');
         var note = cardEl.querySelector('.sr-note');
         b.disabled = true;
         try {
             var res = await fetch(API, {
                 method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action: 'update', id: parseInt(cardEl.dataset.id, 10), decision: b.dataset.act, handled_by: name, reply: note ? note.value : '' })
+                body: JSON.stringify({ action: 'update', id: parseInt(cardEl.dataset.id, 10), decision: b.dataset.act, reply: note ? note.value : '' })
             });
             var data = await res.json();
             if (!res.ok || data.error) throw new Error(data.message || 'HTTP ' + res.status);

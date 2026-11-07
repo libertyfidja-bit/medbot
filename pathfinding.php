@@ -82,10 +82,6 @@ renderTopbar('Hospital Navigation Map', 'A* pathfinding — doctor-confirmed rob
                     <option value="150">Fast</option>
                 </select>
             </div>
-            <div class="form-group" style="margin-bottom:14px">
-                <label class="form-label" for="requested-by">Requested by</label>
-                <input id="requested-by" class="mb-input" type="text" maxlength="100" placeholder="Doctor or nurse name" autocomplete="name">
-            </div>
             <div style="display:flex;flex-direction:column;gap:8px">
                 <button class="btn btn-teal" id="dispatch-btn" onclick="dispatchRobot()" style="width:100%">🚀 Dispatch robot</button>
                 <button class="btn btn-secondary" onclick="findPath()" style="width:100%">🗺️ Preview route</button>
@@ -137,8 +133,6 @@ renderTopbar('Hospital Navigation Map', 'A* pathfinding — doctor-confirmed rob
     <div class="mb-dialog" role="dialog" aria-modal="true" aria-labelledby="cm-title">
         <h3 id="cm-title">🤖 Robot arrived — doctor confirmation needed</h3>
         <div id="cm-body"></div>
-        <label class="form-label" for="cm-doctor" style="margin-top:8px;display:block">Doctor name (saved in the log)</label>
-        <input id="cm-doctor" class="mb-input" type="text" maxlength="100" placeholder="Dr. …" autocomplete="name">
         <div id="cm-error" role="alert"></div>
         <div class="mb-actions">
             <button class="btn btn-teal" id="cm-release" type="button">✅ Confirm &amp; release</button>
