@@ -16,6 +16,7 @@ const voiceBot = (() => {
     const API_SYMPTOMS = BASE + 'api/symptoms.php';
 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const IS_PATIENT = (window.MEDBOT_ROLE || '') === 'patient';   // patients only ever use their own record
 
     const LANGS = [
         ['rw-RW', 'Kinyarwanda'],
@@ -47,7 +48,7 @@ const voiceBot = (() => {
             errGeneric: "Voice error ({code}). You can type instead.", unsupported: "Voice typing is not supported in this browser. Use Chrome or Edge, or type below.",
             noSpeech: "I did not hear anything. Tap the microphone to try again.", startFail: "Could not start the microphone. Please try again.",
             sendFail: "Please try again or call a nurse.", toastUrgent: "🚨 Urgent report sent to the care team", toastOk: "✅ Report sent to the care team",
-            closeAria: "Close", micAria: "Start or stop the microphone",
+            closeAria: "Close", micAria: "Start or stop the microphone", detailsLabel: "Technical details",
             micOn: "Microphone is on. Start speaking…", hearing: "Hearing sound…", speechDetected: "Speech detected — writing it down…",
             noSound: "No sound is reaching the microphone. Check that the right microphone is selected, not muted, and not used by another app.",
         },
@@ -72,7 +73,7 @@ const voiceBot = (() => {
             errGeneric: "Erreur vocale ({code}). Vous pouvez écrire à la place.", unsupported: "La saisie vocale n’est pas prise en charge sur ce navigateur. Utilisez Chrome ou Edge, ou écrivez ci-dessous.",
             noSpeech: "Je n’ai rien entendu. Appuyez sur le micro pour réessayer.", startFail: "Impossible de démarrer le micro. Réessayez.",
             sendFail: "Réessayez ou appelez une infirmière.", toastUrgent: "🚨 Signalement urgent envoyé à l’équipe soignante", toastOk: "✅ Signalement envoyé à l’équipe soignante",
-            closeAria: "Fermer", micAria: "Démarrer ou arrêter le micro",
+            closeAria: "Fermer", micAria: "Démarrer ou arrêter le micro", detailsLabel: "Détails techniques",
             micOn: "Le micro est activé. Commencez à parler…", hearing: "Son détecté…", speechDetected: "Parole détectée — transcription en cours…",
             noSound: "Aucun son n’arrive au micro. Vérifiez que le bon micro est choisi, qu’il n’est pas coupé et qu’aucune autre application ne l’utilise.",
         },
@@ -99,7 +100,7 @@ const voiceBot = (() => {
             errGeneric: "Ikibazo cy’ijwi ({code}). Ushobora kwandika.", unsupported: "Kuvuga ntibishoboka kuri iyi porogaramu. Koresha Chrome cyangwa Edge, cyangwa wandike hepfo.",
             noSpeech: "Sinumvise ijwi. Kanda mikoro ugerageze nanone.", startFail: "Mikoro ntiyashoboye gufungurwa. Ongera ugerageze.",
             sendFail: "Ongera ugerageze cyangwa uhamagare umuforomo.", toastUrgent: "🚨 Ubutumwa bwihutirwa bwoherejwe ku baganga", toastOk: "✅ Ubutumwa bwoherejwe ku baganga",
-            closeAria: "Funga", micAria: "Fungura cyangwa ufunge mikoro",
+            closeAria: "Funga", micAria: "Fungura cyangwa ufunge mikoro", detailsLabel: "Ibisobanuro bya tekiniki",
             micOn: "Mikoro irakora. Tangira uvuge…", hearing: "Ndumva ijwi…", speechDetected: "Mbonye amagambo — ndayandika…",
             noSound: "Nta jwi rigera kuri mikoro. Reba ko mikoro ukoresha ari yo, itafunzwe, kandi nta yindi porogaramu iyikoresha.",
         },
@@ -128,6 +129,15 @@ const voiceBot = (() => {
     let askUsed = false;
     let patientState = 'loading';   // 'loading' | 'ready' | 'failed'
     let patientsLoaded = false;
+    let selfId = '';
+
+    const events = [];
+    function logEvent(msg) {
+        events.push(new Date().toLocaleTimeString() + '  ' + msg);
+        if (events.length > 14) events.shift();
+        const el = $('vp-log');
+        if (el) el.textContent = events.join('\n');
+    }
 
     function ui() {
         const p = lang.split('-')[0];
@@ -165,6 +175,9 @@ const voiceBot = (() => {
         .vp-mic{width:64px;height:64px;border-radius:50%;border:none;cursor:pointer;font-size:26px;flex-shrink:0;background:linear-gradient(135deg,var(--accent),var(--teal));box-shadow:0 6px 20px var(--accent-glow)}
         .vp-mic.on{background:var(--danger);animation:vpPulse 1.1s infinite}
         @keyframes vpPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,77,109,.5)}50%{box-shadow:0 0 0 14px rgba(255,77,109,0)}}
+        .vp-details{margin:2px 0 6px;font-size:11.5px;color:var(--text-3)}
+        .vp-details summary{cursor:pointer}
+        .vp-log{font-family:var(--mono);white-space:pre-wrap;word-break:break-word;margin-top:4px;line-height:1.5}
         .vp-status{font-size:13px;color:var(--text-2)}
         .vp-status.live{color:var(--danger);font-weight:600}
         .vp-status.warn{color:var(--warning)}
@@ -214,10 +227,13 @@ const voiceBot = (() => {
                 <button type="button" class="vp-mic" id="vp-mic" data-aria="micAria">🎙️</button>
                 <div class="vp-status" id="vp-status" role="status" aria-live="polite"></div>
             </div>
+            <details class="vp-details"><summary data-i="detailsLabel"></summary><div class="vp-log" id="vp-log"></div></details>
 
             <div id="vp-sec-symptoms">
-                <label class="vp-label" for="vp-patient" data-i="who"></label>
-                <select id="vp-patient"><option value=""></option></select>
+                <div id="vp-who">
+                    <label class="vp-label" for="vp-patient" data-i="who"></label>
+                    <select id="vp-patient"><option value=""></option></select>
+                </div>
 
                 <label class="vp-label" for="vp-text" data-i="saidLabel"></label>
                 <textarea id="vp-text" rows="5" data-ph="saidPlaceholder"></textarea>
@@ -252,6 +268,8 @@ const voiceBot = (() => {
         </div>`;
         document.body.appendChild(wrap);
 
+        if (IS_PATIENT) $('vp-who').hidden = true;
+
         const langSel = $('vp-lang');
         LANGS.forEach(([code, name]) => langSel.add(new Option(name, code)));
         if (!LANGS.some(l => l[0] === lang)) lang = 'en-US';
@@ -277,6 +295,8 @@ const voiceBot = (() => {
         $('vp-patient').addEventListener('change', () => store.set('medbot_patient', $('vp-patient').value));
 
         applyStrings();
+        const m = navigator.userAgent.match(/(Chrome|Edg|OPR|Firefox|Version)\/[\d.]+/);
+        logEvent((SR ? 'speech API: available' : 'speech API: MISSING') + ' | ' + (m ? m[0] : 'unknown browser') + ' | ' + (navigator.onLine ? 'online' : 'OFFLINE'));
     }
 
     // Writes every visible text in the chosen interface language.
@@ -371,7 +391,9 @@ const voiceBot = (() => {
         try {
             const res = await fetch(API_SYMPTOMS + '?action=patients', { cache: 'no-store' });
             const data = await res.json();
+            if (res.status === 401) { location.href = BASE + 'login.php'; return; }
             if (!res.ok || data.error) throw new Error(data.message || 'failed');
+            if (IS_PATIENT && data.patients && data.patients[0]) selfId = String(data.patients[0].id);
             sel.innerHTML = '';
             sel.add(new Option('', ''));
             (data.patients || []).forEach(p => sel.add(new Option(p.name + (p.room_number ? ' — ' + p.room_number : ''), String(p.id))));
@@ -433,6 +455,7 @@ const voiceBot = (() => {
         recognition.maxAlternatives = 1;
 
         recognition.onstart = () => {
+            logEvent('start (' + lang + ')');
             listening = true;
             setMicState(true);
             setStatus(mode === 'symptoms' ? t('listeningSymptoms') : t('listeningAsk'), 'live');
@@ -440,13 +463,14 @@ const voiceBot = (() => {
 
         // Show what the microphone is doing, so problems are visible
         recognition.onaudiostart = () => {
+            logEvent('microphone audio started');
             heardSound = false;
             setStatus(t('micOn'), 'live');
             clearTimeout(soundTimer);
             soundTimer = setTimeout(() => { if (!heardSound && keepListening) setStatus(t('noSound'), 'warn'); }, 6000);
         };
-        recognition.onsoundstart = () => { heardSound = true; clearTimeout(soundTimer); setStatus(t('hearing'), 'live'); };
-        recognition.onspeechstart = () => { heardSound = true; clearTimeout(soundTimer); setStatus(t('speechDetected'), 'live'); };
+        recognition.onsoundstart = () => { logEvent('sound detected'); heardSound = true; clearTimeout(soundTimer); setStatus(t('hearing'), 'live'); };
+        recognition.onspeechstart = () => { logEvent('speech detected'); heardSound = true; clearTimeout(soundTimer); setStatus(t('speechDetected'), 'live'); };
 
         recognition.onresult = e => {
             let interim = '', final = '';
@@ -455,11 +479,13 @@ const voiceBot = (() => {
                 if (r.isFinal) final += r[0].transcript; else interim += r[0].transcript;
             }
             quietRestarts = 0;
+            if (final.trim()) logEvent('FINAL: ' + final.trim().slice(0, 40)); else if (interim.trim()) logEvent('interim: ' + interim.trim().slice(0, 40));
             showInterim(interim);
             if (final.trim()) { showInterim(''); handleFinal(final.trim()); }
         };
 
         recognition.onerror = e => {
+            logEvent('ERROR: ' + e.error);
             if (e.error === 'no-speech') { quietRestarts++; return; }
             if (e.error === 'aborted') return;
             keepListening = false;
@@ -467,6 +493,7 @@ const voiceBot = (() => {
         };
 
         recognition.onend = () => {
+            logEvent('session ended');
             clearTimeout(soundTimer);
             listening = false;
             recognition = null;
@@ -511,10 +538,10 @@ const voiceBot = (() => {
     // ── Sending a symptom report ──
     async function send(kind) {
         const emergency = kind === 'emergency';
-        const patientId = $('vp-patient').value;
+        const patientId = IS_PATIENT ? selfId : $('vp-patient').value;
         let text = $('vp-text').value.trim();
         if (!emergency) {
-            if (!patientId) { setResult(t('needPatient'), 'warn'); $('vp-patient').focus(); return; }
+            if (!patientId && !IS_PATIENT) { setResult(t('needPatient'), 'warn'); $('vp-patient').focus(); return; }
             if (text.length < 3) { setResult(t('needText'), 'warn'); return; }
         } else if (!text) {
             text = 'EMERGENCY: patient pressed the “Call a nurse now” button.';
@@ -542,6 +569,7 @@ const voiceBot = (() => {
             });
             let data = null;
             try { data = await res.json(); } catch (e) { /* not JSON */ }
+            if (res.status === 401) { location.href = BASE + 'login.php'; return; }
             if (!res.ok || !data || data.error) throw new Error((data && data.message) || 'HTTP ' + res.status);
 
             const urgent = data.report && data.report.urgency === 'urgent';
@@ -574,7 +602,7 @@ const voiceBot = (() => {
     async function getAnswer(question) {
         const q = question.toLowerCase();
         try {
-            const res = await fetch(BASE + 'api/schedule.php', { cache: 'no-store' });
+            const res = await fetch(BASE + (IS_PATIENT ? 'api/me.php?action=schedule' : 'api/schedule.php'), { cache: 'no-store' });
             const data = await res.json();
             const schedule = data.schedule || [];
             const now = new Date();
@@ -619,6 +647,9 @@ const voiceBot = (() => {
                     ? `Today's schedule includes ${schedule.length} dose${schedule.length > 1 ? 's' : ''} of: ${meds.join(', ')}.`
                     : 'No medications are scheduled for today.';
             }
+            if (IS_PATIENT && /\b(status|robot|alert|alerts|interaction|interactions|warning)\b/.test(q)) {
+                return 'Please ask your nurse or doctor about that.';
+            }
             if (/\b(status|robot)\b/.test(q)) {
                 try {
                     const st = await (await fetch(BASE + 'api/robot_action.php?action=status', { cache: 'no-store' })).json();
@@ -659,7 +690,15 @@ const voiceBot = (() => {
         speak(response);
     }
 
+    function setLang(code) {
+        if (!LANGS.some(l => l[0] === code)) return;
+        lang = code;
+        store.set('medbot_lang', code);
+        if (built) { $('vp-lang').value = code; stopListening(); applyStrings(); }
+    }
+
     return {
+        setLang,
         togglePanel,
         open: openPanel,
         close: closePanel,

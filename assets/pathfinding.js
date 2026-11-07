@@ -16,6 +16,8 @@ const mapEngine = (() => {
 
     const COLS = 40, ROWS = 28, CELL = 22, TOP_PAD = 56;
     const POLL_MS = 1500;
+    const ROLE = window.MEDBOT_ROLE || '';
+    const CAN_CONFIRM = ROLE === 'doctor' || ROLE === 'admin';   // the server enforces this too
 
     const $ = id => document.getElementById(id);
     const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -457,7 +459,9 @@ const mapEngine = (() => {
                 <button class="btn btn-secondary" data-act="cancel" style="width:100%;margin-top:10px">⏹ Stop robot</button>`;
         } else {
             box.innerHTML = `<div class="mb-note mb-note-warn"><strong>Robot has arrived at ${esc(mission.to_label)}.</strong><br>It is holding the ${esc(t.label.toLowerCase())} until a doctor confirms.</div>` +
-                head + `<button class="btn btn-teal" data-act="review" style="width:100%;margin-top:10px">🩺 Review &amp; confirm</button>`;
+                head + (CAN_CONFIRM
+                    ? `<button class="btn btn-teal" data-act="review" style="width:100%;margin-top:10px">🩺 Review &amp; confirm</button>`
+                    : `<div class="mb-meta" style="margin-top:10px">Waiting for a doctor to confirm the release.</div>`);
         }
     }
 
@@ -510,26 +514,20 @@ const mapEngine = (() => {
             `<p class="mb-big">${t.icon} ${esc(t.label)}</p>` +
             (mission.note ? `<p class="mb-meta">Note: ${esc(mission.note)}</p>` : '') +
             `<p class="mb-meta">From ${esc(mission.from_label)}${mission.requested_by ? ' · requested by ' + esc(mission.requested_by) : ''}</p>` +
-            `<p>Confirm to ${esc(t.release)}. If you hold it, the robot keeps the item.</p>`;
-        let saved = '';
-        try { saved = localStorage.getItem('medbot_doctor') || ''; } catch (e) { /* storage unavailable */ }
-        const nameEl = $('cm-doctor');
-        if (!nameEl.value) nameEl.value = saved || ($('requested-by') ? $('requested-by').value : '');
+            `<p>Confirm to ${esc(t.release)}. If you hold it, the robot keeps the item.</p>` +
+            `<p class="mb-meta">You are signed in as <strong>${esc(window.MEDBOT_USER || '')}</strong>. Your name is recorded with this decision.</p>`;
         $('cm-error').textContent = '';
         modal.hidden = false;
-        nameEl.focus();
+        $('cm-release').focus();
     }
 
     function closeModal() { const m = $('confirm-modal'); if (m) m.hidden = true; }
 
     async function decide(decision) {
         if (!mission) return;
-        const name = $('cm-doctor').value.trim();
-        if (!name) { $('cm-error').textContent = 'Enter the doctor’s name first.'; $('cm-doctor').focus(); return; }
-        try { localStorage.setItem('medbot_doctor', name); } catch (e) { /* ignore */ }
         $('cm-release').disabled = $('cm-reject').disabled = true;
         try {
-            await api('POST', { action: 'confirm', id: mission.id, decision, confirmed_by: name });
+            await api('POST', { action: 'confirm', id: mission.id, decision });
             closeModal();
             toast(decision === 'release' ? '✅ Released — recorded in the robot log' : '✋ Release refused — recorded in the robot log', decision === 'release' ? 'success' : 'warning');
             await poll(true);
@@ -548,6 +546,7 @@ const mapEngine = (() => {
         const res = await fetch(method === 'GET' ? API + '?action=active' : API, opt);
         let data = null;
         try { data = await res.json(); } catch (e) { /* not JSON */ }
+        if (res.status === 401) { location.href = BASE + 'login.php'; }
         if (!res.ok || !data || data.error) {
             const err = new Error((data && data.message) || ('Server returned HTTP ' + res.status));
             err.status = res.status;
@@ -574,8 +573,8 @@ const mapEngine = (() => {
 
             if (mission && mission.status === 'awaiting_confirmation' && promptedFor !== mission.id) {
                 promptedFor = mission.id;
-                toast('🤖 Robot arrived at ' + mission.to_label + ' — doctor confirmation needed', 'warning');
-                openModal();
+                toast('🤖 Robot arrived at ' + mission.to_label + (CAN_CONFIRM ? ' — doctor confirmation needed' : ' — waiting for a doctor to confirm'), 'warning');
+                if (CAN_CONFIRM) openModal();
             }
             if (modalOpen() && (!mission || mission.status !== 'awaiting_confirmation')) {
                 closeModal();
@@ -688,7 +687,6 @@ const mapEngine = (() => {
         window.addEventListener('resize', resize);
 
         fillSelects();
-        try { const n = localStorage.getItem('medbot_doctor'); if (n && $('requested-by')) $('requested-by').value = n; } catch (e) { /* ignore */ }
 
         // Click the map to add or remove an obstacle
         canvas.addEventListener('click', e => {
@@ -722,7 +720,7 @@ const mapEngine = (() => {
                     fromKey: lastKey || 'current', fromLabel: lastKey ? locName(lastKey) : 'Current position',
                     toKey: 'pharmacy', toLabel: locName('pharmacy'), path,
                     stepMs: parseInt($('speed').value, 10) || 350,
-                }, 'return', '', $('requested-by') ? $('requested-by').value.trim() : '');
+                }, 'return', '', '');
             }
         });
 
@@ -754,9 +752,7 @@ const mapEngine = (() => {
             if (!route) return;
             const task = $('task-type').value || 'medicine';
             const note = $('task-note').value.trim();
-            const by = $('requested-by').value.trim();
-            if (by) { try { localStorage.setItem('medbot_doctor', by); } catch (e) { /* ignore */ } }
-            startMission(route, task, note, by);
+            startMission(route, task, note, '');
         },
         resetMap() {
             preview = [];
