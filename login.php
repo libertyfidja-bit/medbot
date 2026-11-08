@@ -45,5 +45,5 @@ auth_page_head('Sign in');
         </div>
         <button class="btn btn-primary" type="submit" style="width:100%;justify-content:center;padding:11px">Sign in</button>
     </form>
-    <div class="auth-links">Forgot your password? Ask a nurse, doctor or administrator to reset it.</div>
+    <div class="auth-links">Staff forgot their password? Ask an administrator.<br><strong>Patients:</strong> there is no password. Open the link or scan the QR code a nurse gave you. If you lost it, ask staff for a new one.<br>Abarwayi: nta jambo ry’ibanga rikenewe. Koresha ihuza cyangwa QR code wahawe n’umuforomo.</div>
 <?php auth_page_foot(); ?>

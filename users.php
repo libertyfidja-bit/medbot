@@ -2,74 +2,55 @@
 require_once 'connect.php';
 require_once 'layout.php';
 
+// Only administrators can open this page (enforced by the gate as well)
 $me = auth_user();
 auth_start_session();
 $db = getDB();
 auth_ensure_tables($db);
-
-$isAdmin     = $me['role'] === 'admin';
-$createRoles = $isAdmin ? ['patient', 'nurse', 'doctor', 'admin'] : ['patient'];
-$myId        = (int) $me['id'];
-
-/** Loads an account this person is allowed to manage, or null. */
-function users_target(mysqli $db, int $id, bool $isAdmin): ?array {
-    $row = auth_row($db, 'SELECT id, username, role, full_name, active FROM users WHERE id = ?', 'i', [$id]);
-    if (!$row) return null;
-    if (!$isAdmin && $row['role'] !== 'patient') return null;
-    return $row;
-}
+$myId = (int) $me['id'];
 
 if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     $flash = ['type' => 'error', 'msg' => 'This page expired. Please try again.'];
 
-    if (auth_csrf_ok()) {
+    if ($me['role'] === 'admin' && auth_csrf_ok()) {
         $act = (string) ($_POST['action'] ?? '');
 
         if ($act === 'create') {
             $role     = (string) ($_POST['role'] ?? '');
             $name     = mb_substr(trim(strip_tags((string) ($_POST['full_name'] ?? ''))), 0, 150);
             $username = strtolower(trim((string) ($_POST['username'] ?? '')));
-            $pid      = (int) ($_POST['patient_id'] ?? 0);
-
-            if (!in_array($role, $createRoles, true)) {
-                $flash = ['type' => 'error', 'msg' => 'You cannot create that kind of account.'];
+            if (!in_array($role, ['nurse', 'doctor', 'admin'], true)) {
+                $flash = ['type' => 'error', 'msg' => 'Choose nurse, doctor or admin. Patients are registered from “Register patient”.'];
             } elseif (mb_strlen($name) < 2) {
                 $flash = ['type' => 'error', 'msg' => 'Enter the full name.'];
             } elseif (!auth_valid_username($username)) {
                 $flash = ['type' => 'error', 'msg' => 'Username: 3–40 characters, only lowercase letters, numbers, dot, dash or underscore.'];
             } elseif (auth_row($db, 'SELECT id FROM users WHERE username = ?', 's', [$username])) {
                 $flash = ['type' => 'error', 'msg' => 'That username is already taken.'];
-            } elseif ($role === 'patient' && (!auth_row($db, 'SELECT id FROM patients WHERE id = ?', 'i', [$pid]))) {
-                $flash = ['type' => 'error', 'msg' => 'Choose the patient record for this account.'];
-            } elseif ($role === 'patient' && auth_row($db, 'SELECT id FROM users WHERE patient_id = ?', 'i', [$pid])) {
-                $flash = ['type' => 'error', 'msg' => 'That patient already has an account.'];
             } else {
                 $temp = auth_temp_password();
-                if (auth_create_user($db, $username, $temp, $role, $name, $role === 'patient' ? $pid : null, true, $myId > 0 ? $myId : null)) {
+                if (auth_create_user($db, $username, $temp, $role, $name, null, true, $myId > 0 ? $myId : null)) {
                     $flash = ['type' => 'ok', 'msg' => 'Account created for ' . $name . '.', 'temp' => [$username, $temp]];
                 } else {
                     $flash = ['type' => 'error', 'msg' => 'Could not create the account. Please try again.'];
                 }
             }
-        } elseif ($act === 'reset') {
-            $t = users_target($db, (int) ($_POST['id'] ?? 0), $isAdmin);
+        } elseif ($act === 'reset' || $act === 'toggle') {
+            $t = auth_row($db, 'SELECT id, username, role, full_name, active FROM users WHERE id = ?', 'i', [(int) ($_POST['id'] ?? 0)]);
             if (!$t) {
-                $flash = ['type' => 'error', 'msg' => 'You cannot manage that account.'];
+                $flash = ['type' => 'error', 'msg' => 'Account not found.'];
             } elseif ((int) $t['id'] === $myId) {
-                $flash = ['type' => 'error', 'msg' => 'Use “Change password” for your own account.'];
-            } else {
+                $flash = ['type' => 'error', 'msg' => 'You cannot do this to your own account here. Use “Change password”.'];
+            } elseif ($act === 'reset' && $t['role'] === 'patient') {
+                // Patients have no password: make a fresh access link and forget their old phones
+                auth_revoke_devices($db, (int) $t['id']);
+                $token = auth_new_access_link($db, (int) $t['id'], $myId > 0 ? $myId : null);
+                $flash = ['type' => 'ok', 'msg' => 'New access link for ' . $t['full_name'] . '. Their old phones were signed out.', 'link' => auth_access_url($token), 'who' => $t['full_name']];
+            } elseif ($act === 'reset') {
                 $temp = auth_temp_password();
-                $hash = password_hash($temp, PASSWORD_DEFAULT);
-                auth_exec($db, 'UPDATE users SET password_hash = ?, must_change = 1 WHERE id = ?', 'si', [$hash, (int) $t['id']]);
+                auth_exec($db, 'UPDATE users SET password_hash = ?, must_change = 1 WHERE id = ?', 'si', [password_hash($temp, PASSWORD_DEFAULT), (int) $t['id']]);
                 auth_exec($db, 'DELETE FROM login_attempts WHERE username = ?', 's', [$t['username']]);
                 $flash = ['type' => 'ok', 'msg' => 'New temporary password for ' . $t['full_name'] . '.', 'temp' => [$t['username'], $temp]];
-            }
-        } elseif ($act === 'toggle') {
-            $t = users_target($db, (int) ($_POST['id'] ?? 0), $isAdmin);
-            if (!$t) {
-                $flash = ['type' => 'error', 'msg' => 'You cannot manage that account.'];
-            } elseif ((int) $t['id'] === $myId) {
-                $flash = ['type' => 'error', 'msg' => 'You cannot switch off your own account.'];
             } else {
                 $newActive = (int) $t['active'] === 1 ? 0 : 1;
                 $others = auth_row($db, "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1 AND id <> ?", 'i', [(int) $t['id']]);
@@ -77,10 +58,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     $flash = ['type' => 'error', 'msg' => 'There must always be at least one active administrator.'];
                 } else {
                     auth_exec($db, 'UPDATE users SET active = ? WHERE id = ?', 'ii', [$newActive, (int) $t['id']]);
+                    if ($newActive === 0) auth_revoke_devices($db, (int) $t['id']);
                     $flash = ['type' => 'ok', 'msg' => $t['full_name'] . ($newActive ? ' can sign in again.' : ' can no longer sign in.')];
                 }
             }
         }
+    } elseif ($me['role'] !== 'admin') {
+        $flash = ['type' => 'error', 'msg' => 'Only an administrator can manage accounts.'];
     }
     $_SESSION['flash'] = $flash;
     header('Location: users.php');
@@ -90,91 +74,69 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 $flash = $_SESSION['flash'] ?? null;
 unset($_SESSION['flash']);
 
-$patients = [];
-$res = $db->query('SELECT id, name, room_number FROM patients WHERE id NOT IN (SELECT patient_id FROM users WHERE patient_id IS NOT NULL) ORDER BY name');
-if ($res) { while ($r = $res->fetch_assoc()) $patients[] = $r; $res->free(); }
-
 $users = [];
-$sql = 'SELECT u.id, u.username, u.role, u.full_name, u.active, u.must_change, u.last_login, p.name AS patient_name, p.room_number
-        FROM users u LEFT JOIN patients p ON p.id = u.patient_id '
-     . ($isAdmin ? '' : "WHERE u.role = 'patient' ")
-     . 'ORDER BY u.role, u.full_name';
-$res = $db->query($sql);
+$res = $db->query('SELECT u.id, u.username, u.role, u.full_name, u.active, u.must_change, u.last_login, p.name AS patient_name, p.room_number
+                   FROM users u LEFT JOIN patients p ON p.id = u.patient_id ORDER BY u.role, u.full_name');
 if ($res) { while ($r = $res->fetch_assoc()) $users[] = $r; $res->free(); }
-
 $csrf = auth_csrf();
+
 renderHead('Accounts', 'users');
-renderTopbar('Accounts', $isAdmin ? 'Create and manage staff and patient sign-ins' : 'Sign patients up and reset their passwords');
+renderTopbar('Accounts', 'Staff sign-ins and patient access (administrator only)');
 ?>
 <div class="page-content">
 
 <?php if ($flash): ?>
     <div class="alert <?= $flash['type'] === 'ok' ? 'alert-success' : 'alert-error' ?>" role="status">
         <span class="alert-icon"><?= $flash['type'] === 'ok' ? '✅' : '⚠️' ?></span>
-        <div>
+        <div style="flex:1;min-width:0">
             <?= auth_h($flash['msg']) ?>
             <?php if (!empty($flash['temp'])): ?>
                 <div style="margin-top:8px">Username: <strong style="font-family:var(--mono)"><?= auth_h($flash['temp'][0]) ?></strong><br>
                 Temporary password: <strong style="font-family:var(--mono);font-size:16px"><?= auth_h($flash['temp'][1]) ?></strong><br>
                 <span style="font-size:12px">Give this to the person privately. It is shown only once, and they must choose their own password the first time they sign in.</span></div>
             <?php endif; ?>
+            <?php if (!empty($flash['link'])): ?>
+                <div style="margin-top:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+                    <div id="qr" style="background:#fff;padding:8px;border-radius:8px;width:176px;height:176px"></div>
+                    <div style="flex:1;min-width:220px">
+                        Give <strong><?= auth_h($flash['who']) ?></strong> this QR code or link. It works once and expires in 72 hours.
+                        <input id="access-link" type="text" readonly value="<?= auth_h($flash['link']) ?>" style="margin-top:8px;font-family:var(--mono);font-size:12px" onclick="this.select()">
+                        <div style="margin-top:8px"><button type="button" class="btn btn-secondary btn-sm" id="copy-link">📋 Copy link</button></div>
+                    </div>
+                </div>
+            <?php endif; ?>
         </div>
     </div>
 <?php endif; ?>
 
     <div class="card">
-        <div class="card-header"><div class="card-title">➕ Create an account</div></div>
+        <div class="card-header"><div class="card-title">➕ Create a staff account</div></div>
         <div class="card-body">
             <form method="post" action="users.php" autocomplete="off">
-                <input type="hidden" name="csrf" value="<?= auth_h($csrf) ?>">
-                <input type="hidden" name="action" value="create">
+                <input type="hidden" name="csrf" value="<?= auth_h($csrf) ?>"><input type="hidden" name="action" value="create">
                 <div class="form-grid">
-                    <div class="form-group">
-                        <label class="form-label" for="u-role">Role</label>
-                        <select id="u-role" name="role">
-                            <?php foreach ($createRoles as $r): ?>
-                                <option value="<?= auth_h($r) ?>"><?= auth_h(ucfirst($r)) ?><?= $r === 'nurse' ? ' / technician' : '' ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="form-group" id="u-patient-wrap">
-                        <label class="form-label" for="u-patient">Patient record</label>
-                        <select id="u-patient" name="patient_id">
-                            <option value="">— Choose a patient —</option>
-                            <?php foreach ($patients as $p): ?>
-                                <option value="<?= (int) $p['id'] ?>" data-name="<?= auth_h($p['name']) ?>"><?= auth_h($p['name']) ?><?= $p['room_number'] ? ' — Room ' . auth_h($p['room_number']) : '' ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                        <div class="input-hint">Only patients without an account are listed.</div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="u-name">Full name</label>
-                        <input id="u-name" name="full_name" type="text" maxlength="150" required>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="u-username">Username</label>
-                        <input id="u-username" name="username" type="text" maxlength="40" autocapitalize="none" spellcheck="false" required>
-                        <div class="input-hint">Lowercase letters, numbers, dot, dash or underscore.</div>
-                    </div>
+                    <div class="form-group"><label class="form-label" for="u-role">Role</label>
+                        <select id="u-role" name="role"><option value="nurse">Nurse / technician</option><option value="doctor">Doctor</option><option value="admin">Admin</option></select></div>
+                    <div class="form-group"><label class="form-label" for="u-name">Full name</label><input id="u-name" name="full_name" type="text" maxlength="150" required></div>
+                    <div class="form-group"><label class="form-label" for="u-username">Username</label><input id="u-username" name="username" type="text" maxlength="40" autocapitalize="none" spellcheck="false" required><div class="input-hint">Lowercase letters, numbers, dot, dash or underscore.</div></div>
                 </div>
                 <div style="margin-top:14px"><button class="btn btn-primary" type="submit">Create account</button></div>
             </form>
+            <div style="margin-top:10px;font-size:12.5px;color:var(--text-3)">Patients are registered by doctors and nurses from <a href="register_patient.php" style="color:var(--accent)">Register patient</a>. Only you, the administrator, can make a new patient link, reset a password, or switch an account off.</div>
         </div>
     </div>
 
     <div class="card">
-        <div class="card-header"><div class="card-title">👥 <?= $isAdmin ? 'All accounts' : 'Patient accounts' ?></div></div>
+        <div class="card-header"><div class="card-title">👥 All accounts</div></div>
         <div class="table-wrap">
         <table class="dt">
             <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Last sign-in</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
-            <?php if (!$users): ?>
-                <tr><td colspan="6" style="text-align:center;color:var(--text-3);padding:24px">No accounts yet.</td></tr>
-            <?php endif; ?>
+            <?php if (!$users): ?><tr><td colspan="6" style="text-align:center;color:var(--text-3);padding:24px">No accounts yet.</td></tr><?php endif; ?>
             <?php foreach ($users as $u): ?>
                 <tr>
-                    <td><?= auth_h($u['full_name']) ?><?php if ($u['patient_name']): ?><div style="font-size:11.5px;color:var(--text-3)">Record: <?= auth_h($u['patient_name']) ?><?= $u['room_number'] ? ' · Room ' . auth_h($u['room_number']) : '' ?></div><?php endif; ?></td>
-                    <td style="font-family:var(--mono)"><?= auth_h($u['username']) ?></td>
+                    <td><?= auth_h($u['full_name']) ?><?php if ($u['patient_name']): ?><div style="font-size:11.5px;color:var(--text-3)">Patient record<?= $u['room_number'] ? ' · Room ' . auth_h($u['room_number']) : '' ?></div><?php endif; ?></td>
+                    <td style="font-family:var(--mono)"><?= $u['role'] === 'patient' ? '<span style="color:var(--text-3)">link / QR</span>' : auth_h($u['username']) ?></td>
                     <td><span class="badge badge-info"><?= auth_h($u['role']) ?></span></td>
                     <td><?= $u['last_login'] ? auth_h($u['last_login']) : '<span style="color:var(--text-3)">never</span>' ?><?= (int) $u['must_change'] === 1 ? '<div style="font-size:11.5px;color:var(--warning)">must change password</div>' : '' ?></td>
                     <td><span class="badge <?= (int) $u['active'] === 1 ? 'badge-safe' : 'badge-danger' ?>"><?= (int) $u['active'] === 1 ? 'Active' : 'Switched off' ?></span></td>
@@ -183,9 +145,9 @@ renderTopbar('Accounts', $isAdmin ? 'Create and manage staff and patient sign-in
                             <span style="color:var(--text-3);font-size:12px">You · <a href="change_password.php" style="color:var(--accent)">change password</a></span>
                         <?php else: ?>
                             <div style="display:flex;gap:6px;flex-wrap:wrap">
-                                <form method="post" action="users.php" onsubmit="return confirm('Make a new temporary password for this person?')">
+                                <form method="post" action="users.php" onsubmit="return confirm('<?= $u['role'] === 'patient' ? 'Make a new access link? Their old phones will be signed out.' : 'Make a new temporary password for this person?' ?>')">
                                     <input type="hidden" name="csrf" value="<?= auth_h($csrf) ?>"><input type="hidden" name="action" value="reset"><input type="hidden" name="id" value="<?= (int) $u['id'] ?>">
-                                    <button class="btn btn-secondary btn-xs" type="submit">🔑 Reset password</button>
+                                    <button class="btn btn-secondary btn-xs" type="submit"><?= $u['role'] === 'patient' ? '🔗 New access link' : '🔑 Reset password' ?></button>
                                 </form>
                                 <form method="post" action="users.php" onsubmit="return confirm('<?= (int) $u['active'] === 1 ? 'Switch off this account? They will not be able to sign in.' : 'Switch this account on again?' ?>')">
                                     <input type="hidden" name="csrf" value="<?= auth_h($csrf) ?>"><input type="hidden" name="action" value="toggle"><input type="hidden" name="id" value="<?= (int) $u['id'] ?>">
@@ -202,18 +164,19 @@ renderTopbar('Accounts', $isAdmin ? 'Create and manage staff and patient sign-in
     </div>
 </div>
 
+<?php if ($flash && !empty($flash['link'])): ?>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 (function () {
-    var role = document.getElementById('u-role'), wrap = document.getElementById('u-patient-wrap');
-    var pat = document.getElementById('u-patient'), name = document.getElementById('u-name'), user = document.getElementById('u-username');
-    function sync() { wrap.style.display = role.value === 'patient' ? '' : 'none'; }
-    role.addEventListener('change', sync); sync();
-    pat.addEventListener('change', function () {
-        var opt = pat.options[pat.selectedIndex];
-        if (!opt || !opt.dataset.name) return;
-        if (!name.value) name.value = opt.dataset.name;
-        if (!user.value) user.value = opt.dataset.name.toLowerCase().replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '').slice(0, 40);
+    var link = document.getElementById('access-link').value;
+    try { new QRCode(document.getElementById('qr'), { text: link, width: 160, height: 160, correctLevel: QRCode.CorrectLevel.M }); }
+    catch (e) { document.getElementById('qr').textContent = 'QR unavailable — use the link.'; }
+    document.getElementById('copy-link').addEventListener('click', function () {
+        var i = document.getElementById('access-link'); i.select();
+        try { navigator.clipboard.writeText(i.value); } catch (e) { document.execCommand('copy'); }
+        this.textContent = '✅ Copied';
     });
 })();
 </script>
+<?php endif; ?>
 <?php renderFoot(); ?>

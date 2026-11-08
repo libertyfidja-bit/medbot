@@ -21,6 +21,8 @@ $robotMove = home_count($db, "SELECT COUNT(*) FROM robot_missions WHERE status =
 $alerts    = home_count($db, 'SELECT COUNT(*) FROM interaction_alerts WHERE resolved = 0');
 $pending   = home_count($db, "SELECT COUNT(*) FROM dose_schedule WHERE scheduled_date = CURDATE() AND status = 'pending'");
 $missed    = home_count($db, "SELECT COUNT(*) FROM dose_schedule WHERE scheduled_date = CURDATE() AND status = 'missed'");
+$unread    = home_count($db, 'SELECT COUNT(*) FROM messages WHERE to_user = ' . (int) $me['id'] . ' AND read_at IS NULL');
+$payReview = home_count($db, "SELECT COUNT(*) FROM payments WHERE status = 'pending' OR (payer_check = 'mismatch' AND confirmed_at > (NOW() - INTERVAL 7 DAY))");
 
 $top = [];
 $res = $db->query("SELECT id, patient_name, room_number, transcript, urgency, status, TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS age_min
@@ -66,6 +68,10 @@ renderTopbar('Welcome, ' . $me['full_name'], ucfirst($role) . ' workspace');
         <div class="stat-card"><div class="stat-icon">⏰</div><div class="stat-value teal"><?= $pending ?></div><div class="stat-label">Doses still to give today</div></div>
         <?php endif; ?>
         <div class="stat-card"><div class="stat-icon">❗</div><div class="stat-value danger"><?= $missed ?></div><div class="stat-label">Missed doses today</div></div>
+        <div class="stat-card"><div class="stat-icon">✉️</div><div class="stat-value"><?= $unread ?></div><div class="stat-label">Unread messages</div></div>
+        <?php if ($role === 'admin'): ?>
+        <div class="stat-card"><div class="stat-icon">💳</div><div class="stat-value danger"><?= $payReview ?></div><div class="stat-label">Payments to review</div></div>
+        <?php endif; ?>
         <div class="stat-card"><div class="stat-icon">🤖</div><div class="stat-value teal"><?= $robotMove > 0 ? 'Moving' : ($robotWait > 0 ? 'Waiting' : 'Ready') ?></div><div class="stat-label">Robot</div></div>
     </div>
 
@@ -101,7 +107,14 @@ renderTopbar('Welcome, ' . $me['full_name'], ucfirst($role) . ' workspace');
                 <a class="btn btn-secondary" href="patients.php">👥 Patients</a>
                 <?php if ($role !== 'nurse'): ?><a class="btn btn-secondary" href="prescription.php">💊 Prescriptions</a><?php endif; ?>
                 <a class="btn btn-secondary" href="alerts.php">⚠️ Interaction alerts</a>
-                <a class="btn btn-secondary" href="users.php">🔑 <?= $role === 'admin' ? 'Accounts' : 'Patient accounts' ?></a>
+                <a class="btn btn-secondary" href="register_patient.php">➕ Register patient</a>
+                <a class="btn btn-secondary" href="billing.php">🧾 Billing</a>
+                <a class="btn btn-secondary" href="messages.php">✉️ Messages<?= $unread > 0 ? ' (' . $unread . ' new)' : '' ?></a>
+                <?php if ($role === 'admin'): ?>
+                <a class="btn btn-secondary" href="payments.php">💳 Payments</a>
+                <a class="btn btn-secondary" href="insurers.php">🏥 Insurers</a>
+                <a class="btn btn-secondary" href="users.php">🔑 Accounts</a>
+                <?php endif; ?>
             </div>
         </div>
     </div>

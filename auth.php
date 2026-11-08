@@ -111,6 +111,25 @@ function auth_ensure_tables(mysqli $db): void {
         last_login TIMESTAMP NULL,
         UNIQUE KEY uq_users_username (username)
     )");
+    $db->query("CREATE TABLE IF NOT EXISTS access_links (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        token_hash CHAR(64) NOT NULL,
+        created_by INT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP NOT NULL,
+        used_at TIMESTAMP NULL,
+        UNIQUE KEY uq_access_token (token_hash)
+    )");
+    $db->query("CREATE TABLE IF NOT EXISTS patient_devices (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        token_hash CHAR(64) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used TIMESTAMP NULL,
+        expires_at TIMESTAMP NOT NULL,
+        UNIQUE KEY uq_device_token (token_hash)
+    )");
     $db->query("CREATE TABLE IF NOT EXISTS login_attempts (
         id INT AUTO_INCREMENT PRIMARY KEY,
         username VARCHAR(60) NOT NULL,
@@ -142,6 +161,17 @@ function auth_user(): ?array {
 
     auth_start_session();
     $id = (int) ($_SESSION['uid'] ?? 0);
+
+    // A patient's phone that opened a valid access link is remembered (30 days): no password needed
+    if ($id <= 0 && !empty($_COOKIE['medbot_pt']) && preg_match('/^[a-f0-9]{64}$/', (string) $_COOKIE['medbot_pt'])) {
+        $dev = auth_row(getDB(), "SELECT d.id, d.user_id FROM patient_devices d JOIN users u ON u.id = d.user_id WHERE d.token_hash = ? AND d.expires_at > NOW() AND u.active = 1 AND u.role = 'patient'", 's', [auth_hash_token((string) $_COOKIE['medbot_pt'])]);
+        if ($dev) {
+            session_regenerate_id(true);
+            $_SESSION = ['uid' => (int) $dev['user_id'], 'started' => time(), 'last_seen' => time()];
+            $id = (int) $dev['user_id'];
+            auth_exec(getDB(), 'UPDATE patient_devices SET last_used = NOW() WHERE id = ?', 'i', [(int) $dev['id']]);
+        }
+    }
     if ($id <= 0) return $cache = null;
 
     $row = auth_row(getDB(), 'SELECT id, username, role, full_name, patient_id, active, must_change FROM users WHERE id = ?', 'i', [$id]);
@@ -268,6 +298,72 @@ function auth_login(string $username, string $password): array {
     return [true, '', $row];
 }
 
+/* ───────────── patients: access by link / QR code (no password) ───────────── */
+
+function auth_hash_token(string $t): string {
+    return hash('sha256', $t);
+}
+
+/** Creates the patient's sign-in account. The random password is never shown or used. */
+function auth_create_patient_account(mysqli $db, int $patientId, string $fullName, ?int $createdBy): ?int {
+    $username = 'pt' . $patientId . '-' . bin2hex(random_bytes(2));
+    if (!auth_create_user($db, $username, bin2hex(random_bytes(16)), 'patient', $fullName, $patientId, false, $createdBy)) return null;
+    $row = auth_row($db, 'SELECT id FROM users WHERE username = ?', 's', [$username]);
+    return $row ? (int) $row['id'] : null;
+}
+
+/** One-time link (valid 72 hours) that signs a patient's phone in. Returns the secret token. */
+function auth_new_access_link(mysqli $db, int $userId, ?int $createdBy): string {
+    auth_exec($db, 'DELETE FROM access_links WHERE user_id = ? AND used_at IS NULL', 'i', [$userId]);
+    $token = bin2hex(random_bytes(20));
+    auth_exec($db, 'INSERT INTO access_links (user_id, token_hash, expires_at, created_by) VALUES (?,?,(NOW() + INTERVAL 72 HOUR),?)', 'isi', [$userId, auth_hash_token($token), $createdBy]);
+    return $token;
+}
+
+function auth_access_url(string $token): string {
+    $scheme = auth_is_https() ? 'https' : 'http';
+    return $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . auth_base_url() . '/access.php?t=' . $token;
+}
+
+/** Forgets every phone that was signed in for this patient. */
+function auth_revoke_devices(mysqli $db, int $userId): void {
+    auth_exec($db, 'DELETE FROM patient_devices WHERE user_id = ?', 'i', [$userId]);
+}
+
+/** Uses an access link: signs the phone in and remembers it. Returns false when the link is not valid. */
+function auth_use_access_token(string $token): bool {
+    if (!preg_match('/^[a-f0-9]{40}$/', $token)) return false;
+    $db = getDB();
+    $link = auth_row($db, "SELECT l.id, l.user_id FROM access_links l JOIN users u ON u.id = l.user_id WHERE l.token_hash = ? AND l.used_at IS NULL AND l.expires_at > NOW() AND u.active = 1 AND u.role = 'patient'", 's', [auth_hash_token($token)]);
+    if (!$link) return false;
+    $n = auth_exec($db, 'UPDATE access_links SET used_at = NOW() WHERE id = ? AND used_at IS NULL', 'i', [(int) $link['id']]);
+    if (!$n) return false;
+
+    $device = bin2hex(random_bytes(32));
+    auth_exec($db, 'INSERT INTO patient_devices (user_id, token_hash, expires_at) VALUES (?,?,(NOW() + INTERVAL 30 DAY))', 'is', [(int) $link['user_id'], auth_hash_token($device)]);
+    setcookie('medbot_pt', $device, [
+        'expires'  => time() + 30 * 86400,
+        'path'     => '/',
+        'secure'   => auth_is_https(),
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+    auth_start_session();
+    session_regenerate_id(true);
+    $_SESSION = ['uid' => (int) $link['user_id'], 'started' => time(), 'last_seen' => time()];
+    auth_exec($db, 'UPDATE users SET last_login = NOW() WHERE id = ?', 'i', [(int) $link['user_id']]);
+    return true;
+}
+
+/** Signs out for real: also forgets this phone, so a patient is not signed straight back in. */
+function auth_logout(): void {
+    if (!empty($_COOKIE['medbot_pt']) && preg_match('/^[a-f0-9]{64}$/', (string) $_COOKIE['medbot_pt'])) {
+        auth_exec(getDB(), 'DELETE FROM patient_devices WHERE token_hash = ?', 's', [auth_hash_token((string) $_COOKIE['medbot_pt'])]);
+    }
+    setcookie('medbot_pt', '', ['expires' => time() - 42000, 'path' => '/', 'secure' => auth_is_https(), 'httponly' => true, 'samesite' => 'Lax']);
+    auth_destroy_session();
+}
+
 /* ───────────── standalone page chrome (login, setup, password, patient) ───────────── */
 
 function auth_page_head(string $title): void { ?>
@@ -338,10 +434,11 @@ function auth_html_error(int $code, string $title, string $msg, ?array $user): n
 /** Who may open which page or API. Anything not listed here is for staff only. */
 function auth_allowed(string $rel, array $user): bool {
     $role = $user['role'];
-    if ($rel === 'change_password.php') return true;
-    if ($rel === 'patient.php' || $rel === 'api/me.php') return $role === 'patient';
+    if ($rel === 'change_password.php') return $role !== 'patient';     // patients have no password
+    if (in_array($rel, ['patient.php', 'api/me.php', 'api/pay.php'], true)) return $role === 'patient';
     if ($rel === 'api/symptoms.php') return true;               // checked again inside the API
     if ($role === 'patient') return false;                      // patients: nothing else
+    if (in_array($rel, ['users.php', 'payments.php', 'insurers.php'], true)) return $role === 'admin';   // admin only
     if (stripos($rel, 'prescription') !== false) {
         if ($role === 'nurse') return ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET';   // nurses may look, not change
         return in_array($role, ['doctor', 'admin'], true);
@@ -372,15 +469,18 @@ function auth_gate(): void {
     $isApi = strpos($rel, 'api/') === 0;
 
     // Include files are never pages
-    if (in_array($rel, ['auth.php', 'gate.php', 'connect.php', 'layout.php'], true)) {
+    if (in_array($rel, ['auth.php', 'gate.php', 'connect.php', 'layout.php', 'billing_lib.php'], true)) {
         http_response_code(404);
         exit;
     }
 
+    // Payment provider callback: not a person, it proves itself with a secret signature
+    if ($rel === 'api/payment_webhook.php') return;
+
     auth_check_origin();
 
     // Pages anyone can open
-    if (in_array($rel, ['login.php', 'logout.php', 'setup.php'], true)) {
+    if (in_array($rel, ['login.php', 'logout.php', 'setup.php', 'access.php'], true)) {
         auth_start_session();
         return;
     }

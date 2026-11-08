@@ -44,6 +44,21 @@ body{background:var(--bg-0)}
 .pt-rep:last-child{border-bottom:0}
 .pt-rep .row{display:flex;justify-content:space-between;gap:8px;margin-top:6px;font-size:12px;color:var(--text-3);align-items:center}
 .pt-err{margin:10px 0;padding:10px 12px;border-radius:10px;background:rgba(255,77,109,.1);border:1px solid rgba(255,77,109,.35);color:var(--danger);font-size:13.5px}
+.pt-out{background:rgba(255,77,109,.12);border:2px solid var(--danger);color:var(--danger);text-decoration:none;max-width:420px;margin:0 auto}
+.pt-note{margin:12px 16px 0;padding:8px 12px;border-radius:10px;background:rgba(255,169,77,.1);border:1px solid rgba(255,169,77,.35);color:var(--warning);font-size:12.5px}
+.pt-inv{padding:14px 16px;border-bottom:1px solid var(--border)}
+.pt-inv:last-child{border-bottom:0}
+.pt-inv .row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;color:var(--text-1)}
+.pt-items{margin:0 0 8px 18px;padding:0;font-size:13.5px;color:var(--text-2);line-height:1.6}
+.pt-sum{font-size:13.5px;color:var(--text-2)}
+.pt-sum div{display:flex;justify-content:space-between;gap:10px;padding:2px 0}
+.pt-sum .you{margin-top:6px;padding-top:8px;border-top:1px solid var(--border);font-size:18px;font-weight:700;color:var(--teal)}
+.pt-methods{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
+.pt-methods button,.pt-paygo button{min-height:52px;border-radius:12px;border:1px solid var(--border-grey);background:var(--bg-3);color:var(--text-1);font:inherit;font-weight:600;font-size:14px;cursor:pointer;padding:8px}
+.pt-paygo{margin-top:12px;display:grid;gap:8px}
+.pt-paygo input{font-size:18px;padding:12px}
+.pt-paygo .go{background:linear-gradient(135deg,#00d4aa,#00b894);color:#0a0a0f;border:none;font-weight:800;font-size:16px}
+.pt-wait{margin-top:10px;font-size:13.5px;color:var(--text-1)}
 .pt-toast{position:fixed;left:12px;right:12px;bottom:20px;z-index:500;background:var(--bg-2);border:1px solid var(--border-accent);border-radius:12px;padding:14px 16px;color:var(--text-1);font-size:14.5px;box-shadow:var(--shadow-lg);display:none}
 </style>
 <script>window.MEDBOT_ROLE = "patient"; window.MEDBOT_USER = <?= json_encode($user['full_name'], $jsonFlags) ?>;</script>
@@ -59,7 +74,6 @@ body{background:var(--bg-0)}
                 <button type="button" data-ui="en">English</button>
                 <button type="button" data-ui="fr">Français</button>
             </div>
-            <div class="pt-links"><a href="change_password.php" data-i="password"></a> · <a href="logout.php" data-i="signOut"></a></div>
         </div>
     </div>
 
@@ -75,6 +89,11 @@ body{background:var(--bg-0)}
     </div>
 
     <div class="pt-card">
+        <h2 data-i="payTitle"></h2>
+        <div id="pt-pay"></div>
+    </div>
+
+    <div class="pt-card">
         <h2 data-i="msgTitle"></h2>
         <div id="pt-msgs"></div>
     </div>
@@ -82,6 +101,10 @@ body{background:var(--bg-0)}
     <div class="pt-card">
         <h2 data-i="repTitle"></h2>
         <div id="pt-reps"></div>
+    </div>
+
+    <div style="text-align:center;margin:26px 0 10px">
+        <a href="logout.php" class="pt-big pt-out" data-i="signOutBig"></a>
     </div>
 </div>
 <div class="pt-toast" id="pt-toast" role="status" aria-live="polite"></div>
@@ -97,18 +120,21 @@ body{background:var(--bg-0)}
     // Interface texts. The Kinyarwanda block is a DRAFT: please have a Kinyarwanda speaker check it.
     var T = {
         en: { hello: 'Hello', signOut: 'Sign out', password: 'Change password',
+            payTitle: '💳 Pay for my care', payNone: 'Nothing to pay right now.', invTotal: 'Total', invIns: 'Paid by insurance', invYou: 'You pay', payWith: 'Pay with', mtn: 'MTN Mobile Money', airtel: 'Airtel Money', card: 'Card', cash: 'Cash at the cashier', phoneLbl: 'Mobile money number', payNow: 'Pay', back: 'Back', st_unpaid: 'To pay', st_pending: 'Waiting for confirmation', st_paid: 'Paid ✓', payWait: 'Waiting for the payment to be confirmed. Approve it on your phone if you are asked.', cashWait: 'Go to the cashier with this reference:', cancelPay: 'Cancel this payment', sandboxNote: 'Test mode: no real money is charged.', signOutBig: '⎋ Sign out of this phone',
             tell: '🎙️ Tell the care team how you feel', call: '🚨 Call a nurse now', confirmCall: 'Alert the nurses now?', sosSent: '🚨 The nurses have been alerted.',
             medsTitle: '💊 My medicines today', noMeds: 'No medicines are planned for today.', took: '✅ I took it', thanks: 'Thank you. It was recorded.',
             pending: 'Not taken yet', taken: 'Taken ✓', dispensed: 'Brought by the robot. Please take it.', missed: 'Not taken', skipped: 'Skipped',
             next: 'Next medicine', at: 'at', msgTitle: '💬 Messages from the care team', noMsgs: 'No messages yet.', repTitle: '🩺 What I told the care team', noReps: 'You have not sent anything yet.',
             sNew: 'Sent', sAck: 'Seen by staff', sDone: 'Closed', now: 'just now', m: ' min ago', h: ' h ago', d: ' d ago', loadFail: 'Could not load your information. Please try again.', by: 'From' },
         fr: { hello: 'Bonjour', signOut: 'Se déconnecter', password: 'Changer le mot de passe',
+            payTitle: '💳 Payer mes soins', payNone: 'Rien à payer pour le moment.', invTotal: 'Total', invIns: 'Pris en charge par l’assurance', invYou: 'Vous payez', payWith: 'Payer avec', mtn: 'MTN Mobile Money', airtel: 'Airtel Money', card: 'Carte', cash: 'Espèces à la caisse', phoneLbl: 'Numéro Mobile Money', payNow: 'Payer', back: 'Retour', st_unpaid: 'À payer', st_pending: 'En attente de confirmation', st_paid: 'Payé ✓', payWait: 'En attente de confirmation du paiement. Approuvez-le sur votre téléphone si on vous le demande.', cashWait: 'Allez à la caisse avec cette référence :', cancelPay: 'Annuler ce paiement', sandboxNote: 'Mode test : aucun argent réel n’est débité.', signOutBig: '⎋ Se déconnecter de ce téléphone',
             tell: '🎙️ Dire à l’équipe comment je me sens', call: '🚨 Appeler une infirmière', confirmCall: 'Alerter les infirmières maintenant ?', sosSent: '🚨 Les infirmières ont été alertées.',
             medsTitle: '💊 Mes médicaments aujourd’hui', noMeds: 'Aucun médicament prévu aujourd’hui.', took: '✅ Je l’ai pris', thanks: 'Merci. C’est enregistré.',
             pending: 'Pas encore pris', taken: 'Pris ✓', dispensed: 'Apporté par le robot. Prenez-le.', missed: 'Non pris', skipped: 'Ignoré',
             next: 'Prochain médicament', at: 'à', msgTitle: '💬 Messages de l’équipe soignante', noMsgs: 'Aucun message pour le moment.', repTitle: '🩺 Ce que j’ai dit à l’équipe', noReps: 'Vous n’avez encore rien envoyé.',
             sNew: 'Envoyé', sAck: 'Vu par le personnel', sDone: 'Clôturé', now: 'à l’instant', m: ' min', h: ' h', d: ' j', loadFail: 'Impossible de charger vos informations. Réessayez.', by: 'De' },
         rw: { hello: 'Muraho', signOut: 'Sohoka', password: 'Hindura ijambo ry’ibanga',
+            payTitle: '💳 Kwishyura serivisi y’ubuvuzi', payNone: 'Nta cyo wishyura ubu.', invTotal: 'Yose hamwe', invIns: 'Byishyurwa n’ubwishingizi', invYou: 'Ugomba kwishyura', payWith: 'Ishyura ukoresheje', mtn: 'MTN Mobile Money', airtel: 'Airtel Money', card: 'Ikarita', cash: 'Amafaranga kuri kasiye', phoneLbl: 'Nimero ya Mobile Money', payNow: 'Ishyura', back: 'Subira inyuma', st_unpaid: 'Hakwiye kwishyurwa', st_pending: 'Dutegereje kwemeza', st_paid: 'Byishyuwe ✓', payWait: 'Dutegereje ko kwishyura kwemezwa. Emeza kuri telefoni yawe nibabikubaza.', cashWait: 'Jya kwa kasiye ufite iyi nimero:', cancelPay: 'Hagarika kwishyura', sandboxNote: 'Uburyo bwo kugerageza: nta mafaranga nyayo akurwaho.', signOutBig: '⎋ Sohoka kuri iyi telefoni',
             tell: '🎙️ Bwira abaganga uko wumva umeze', call: '🚨 Hamagara umuforomo ubu', confirmCall: 'Menyesha abaforomo ubu?', sosSent: '🚨 Abaforomo bamenyeshejwe.',
             medsTitle: '💊 Imiti yanjye uyu munsi', noMeds: 'Nta miti iteganyijwe uyu munsi.', took: '✅ Nayinyweye', thanks: 'Murakoze. Byanditswe.',
             pending: 'Ntiranywa', taken: 'Yanyowe ✓', dispensed: 'Yashyikirijwe — yinywe.', missed: 'Ntiyanyowe', skipped: 'Ntiyanyowe',
@@ -142,6 +168,7 @@ body{background:var(--bg-0)}
     }
 
     function render() {
+        renderPay();
         if (!data) return;
         $('pt-name').textContent = data.name || '';
         var doses = data.schedule || [];
@@ -225,8 +252,97 @@ body{background:var(--bg-0)}
         });
     });
 
+    // ───── Paying for care ─────
+    var pay = { invoices: [], phone: '', mode: 'sandbox', pick: null, draft: '' };
+    var payTimer = null;
+    var METHOD_KEY = { mtn_momo: 'mtn', airtel_money: 'airtel', card: 'card', cash: 'cash' };
+    function money(n) { return Number(n).toLocaleString('en-US') + ' RWF'; }
+
+    function payActions(v) {
+        if (pay.pick && pay.pick.id === v.id) {
+            var phone = pay.draft || pay.phone || '';
+            return '<div class="pt-paygo"><label class="form-label" for="pay-phone">' + esc(t('phoneLbl')) + ' (' + esc(t(METHOD_KEY[pay.pick.method])) + ')</label>' +
+                '<input id="pay-phone" class="pay-phone" type="tel" inputmode="tel" placeholder="07XXXXXXXX" value="' + esc(phone) + '">' +
+                '<button type="button" class="go" data-go="' + v.id + '">' + esc(t('payNow')) + ' ' + esc(money(v.patient_amount)) + '</button>' +
+                '<button type="button" data-back="1">' + esc(t('back')) + '</button></div>';
+        }
+        return '<div style="margin-top:12px;font-size:13px;color:var(--text-2)">' + esc(t('payWith')) + '</div><div class="pt-methods">' +
+            ['mtn_momo', 'airtel_money', 'card', 'cash'].map(function (m) { return '<button type="button" data-method="' + m + '" data-inv="' + v.id + '">' + esc(t(METHOD_KEY[m])) + '</button>'; }).join('') + '</div>';
+    }
+
+    function renderPay() {
+        var box = $('pt-pay');
+        if (!box) return;
+        if (!pay.invoices.length) { box.innerHTML = '<div class="pt-empty">' + esc(t('payNone')) + '</div>'; return; }
+        box.innerHTML = (pay.mode === 'sandbox' ? '<div class="pt-note">' + esc(t('sandboxNote')) + '</div>' : '') + pay.invoices.map(function (v) {
+            var items = v.items.map(function (i) { return '<li>' + esc(i.description) + (i.qty > 1 ? ' × ' + i.qty : '') + ' — ' + esc(money(i.amount)) + '</li>'; }).join('');
+            var badge = v.status === 'paid' ? 'badge-safe' : v.status === 'pending' ? 'badge-info' : 'badge-warning';
+            var html = '<div class="pt-inv"><div class="row"><strong>#' + v.id + '</strong><span class="badge ' + badge + '">' + esc(t('st_' + v.status)) + '</span></div>' +
+                '<ul class="pt-items">' + items + '</ul>' +
+                '<div class="pt-sum"><div><span>' + esc(t('invTotal')) + '</span><span>' + esc(money(v.total_amount)) + '</span></div>' +
+                '<div><span>' + esc(t('invIns')) + ' (' + esc(v.insurer_name || '') + ', ' + (+v.coverage_pct) + '%)</span><span>− ' + esc(money(v.insurance_amount)) + '</span></div>' +
+                '<div class="you"><span>' + esc(t('invYou')) + '</span><span>' + esc(money(v.patient_amount)) + '</span></div></div>';
+            if (v.status === 'unpaid' && v.patient_amount > 0) html += payActions(v);
+            if (v.status === 'pending') {
+                html += '<div class="pt-wait">' + esc(v.payment && v.payment.method === 'cash' ? t('cashWait') : t('payWait')) + '</div>';
+                if (v.payment) html += '<button type="button" class="pt-took" style="background:var(--bg-3);color:var(--text-1);margin-top:8px" data-cancelpay="' + v.payment.id + '">' + esc(t('cancelPay')) + '</button>';
+            }
+            return html + '</div>';
+        }).join('');
+    }
+
+    async function loadPay() {
+        clearTimeout(payTimer);
+        try {
+            var res = await fetch('/medbot/api/pay.php?action=invoices', { cache: 'no-store' });
+            var j = await res.json();
+            if (res.status === 401) { location.href = 'login.php'; return; }
+            if (res.ok && !j.error) {
+                pay.invoices = j.invoices || []; pay.phone = j.phone || ''; pay.mode = j.mode || 'sandbox';
+                var typing = document.activeElement && document.activeElement.id === 'pay-phone';
+                if (!typing) renderPay();
+            }
+        } catch (e) { /* try again later */ }
+        var waiting = pay.invoices.some(function (v) { return v.status === 'pending'; });
+        payTimer = setTimeout(loadPay, waiting ? 6000 : 30000);
+    }
+
+    async function startPay(invId, method, phone) {
+        try {
+            var res = await fetch('/medbot/api/pay.php', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'start', invoice_id: invId, method: method, phone: phone }) });
+            var j = await res.json();
+            if (!res.ok || j.error) throw new Error(j.message || 'HTTP ' + res.status);
+            pay.pick = null;
+            toast(j.message || 'OK');
+        } catch (err) { toast(err.message); }
+        loadPay();
+    }
+
+    $('pt-pay').addEventListener('input', function (e) { if (e.target.classList.contains('pay-phone')) pay.draft = e.target.value; });
+    $('pt-pay').addEventListener('click', async function (e) {
+        var b = e.target.closest('button');
+        if (!b) return;
+        if (b.dataset.method) {
+            var id = parseInt(b.dataset.inv, 10);
+            if (b.dataset.method === 'mtn_momo' || b.dataset.method === 'airtel_money') { pay.pick = { id: id, method: b.dataset.method }; renderPay(); var f = $('pay-phone'); if (f) f.focus(); }
+            else startPay(id, b.dataset.method, '');
+        } else if (b.dataset.go) {
+            startPay(parseInt(b.dataset.go, 10), pay.pick ? pay.pick.method : '', ($('pay-phone') || {}).value || '');
+        } else if (b.dataset.back) {
+            pay.pick = null; renderPay();
+        } else if (b.dataset.cancelpay) {
+            try {
+                var res = await fetch('/medbot/api/pay.php', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'cancel', payment_id: parseInt(b.dataset.cancelpay, 10) }) });
+                var j = await res.json();
+                if (!res.ok || j.error) throw new Error(j.message || 'HTTP ' + res.status);
+            } catch (err) { toast(err.message); }
+            loadPay();
+        }
+    });
+
     applyLang();
     load();
+    loadPay();
     setInterval(load, 30000);
 })();
 </script>

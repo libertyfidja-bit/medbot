@@ -9,6 +9,18 @@ function renderHead(string $title, string $active = 'dashboard'): void {
     $jsonFlags = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
     // Count unresolved alerts for badge
     $alertCount = $db->query("SELECT COUNT(*) FROM interaction_alerts WHERE resolved=0")->fetch_row()[0] ?? 0;
+    // Unread messages for this person (the table is created the first time billing is used)
+    $msgCount = 0;
+    try {
+        $mr = $db->prepare('SELECT COUNT(*) FROM messages WHERE to_user = ? AND read_at IS NULL');
+        if ($mr) {
+            $uid = (int) ($me['id'] ?? 0);
+            $mr->bind_param('i', $uid);
+            if ($mr->execute()) { $mr->bind_result($msgCount); $mr->fetch(); }
+            $mr->close();
+        }
+    } catch (Throwable $e) { $msgCount = 0; }
+    $msgCount = (int) $msgCount;
     // Count new patient symptom reports for badge (table is created the first time the symptoms API runs)
     $symCount = 0;
     try {
@@ -28,6 +40,11 @@ function renderHead(string $title, string $active = 'dashboard'): void {
 <link rel="stylesheet" href="/medbot/assets/style.css">
 <script>window.MEDBOT_ROLE = <?= json_encode($role, $jsonFlags) ?>; window.MEDBOT_USER = <?= json_encode($me['full_name'] ?? '', $jsonFlags) ?>;</script>
 <style>
+/* ── Big centred sign-out ── */
+.topbar-left{flex:1;min-width:0}
+.topbar-right{flex:1;justify-content:flex-end}
+.topbar-center{flex:0 0 auto;display:flex;justify-content:center}
+.signout-big{padding:11px 34px;font-size:15px;font-weight:700;letter-spacing:.3px;border-width:2px}
 /* ── Phone fixes ── */
 .menu-btn{display:none;background:var(--bg-3);border:1px solid var(--border-grey);color:var(--text-1);width:40px;height:40px;border-radius:10px;font-size:20px;line-height:1;cursor:pointer;flex-shrink:0}
 .sidebar-backdrop{display:none}
@@ -41,6 +58,8 @@ function renderHead(string $title, string $active = 'dashboard'): void {
     .page-content{padding-bottom:96px !important}
 }
 @media(max-width:600px){
+    .topbar-center{order:3;width:100%}
+    .signout-big{width:100%;justify-content:center;padding:13px 16px;font-size:16px}
     #topbar-robot-status{display:none !important}
     .topbar-sub{display:none}
     .topbar-right .btn{padding:7px 11px;font-size:12px}
@@ -99,9 +118,32 @@ function renderHead(string $title, string $active = 'dashboard'): void {
             <a href="/medbot/schedule.php" class="<?= $active==='schedule'?'active':'' ?>">
                 <span class="nav-icon">📅</span> Schedule
             </a>
-            <a href="/medbot/users.php" class="<?= $active==='users'?'active':'' ?>">
-                <span class="nav-icon">🔑</span> <?= $role === 'admin' ? 'Accounts' : 'Patient accounts' ?>
+        </nav>
+    </div>
+    <div class="sidebar-section">
+        <div class="sidebar-label">Patients &amp; payments</div>
+        <nav class="sidebar-nav">
+            <a href="/medbot/register_patient.php" class="<?= $active==='register'?'active':'' ?>">
+                <span class="nav-icon">➕</span> Register patient
             </a>
+            <a href="/medbot/billing.php" class="<?= $active==='billing'?'active':'' ?>">
+                <span class="nav-icon">🧾</span> Billing
+            </a>
+            <a href="/medbot/messages.php" class="<?= $active==='messages'?'active':'' ?>">
+                <span class="nav-icon">✉️</span> Messages
+                <?php if ($msgCount > 0): ?><span class="nav-badge"><?= $msgCount ?></span><?php endif; ?>
+            </a>
+            <?php if ($role === 'admin'): ?>
+            <a href="/medbot/payments.php" class="<?= $active==='payments'?'active':'' ?>">
+                <span class="nav-icon">💳</span> Payments
+            </a>
+            <a href="/medbot/insurers.php" class="<?= $active==='insurers'?'active':'' ?>">
+                <span class="nav-icon">🏥</span> Insurers
+            </a>
+            <a href="/medbot/users.php" class="<?= $active==='users'?'active':'' ?>">
+                <span class="nav-icon">🔑</span> Accounts
+            </a>
+            <?php endif; ?>
         </nav>
     </div>
     <div style="flex:1"></div>
@@ -109,7 +151,7 @@ function renderHead(string $title, string $active = 'dashboard'): void {
         <div class="conn-dot"></div>
         <div style="min-width:0;flex:1;line-height:1.3">
             <div style="color:var(--text-1);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><?= htmlspecialchars($me['full_name'] ?? '') ?></div>
-            <div style="font-size:11px"><?= htmlspecialchars(ucfirst($role)) ?> · <a href="/medbot/change_password.php" style="color:var(--accent)">password</a> · <a href="/medbot/logout.php" style="color:var(--accent)">sign out</a></div>
+            <div style="font-size:11px"><?= htmlspecialchars(ucfirst($role)) ?> · <a href="/medbot/change_password.php" style="color:var(--accent)">password</a></div>
         </div>
     </div>
 </aside>
@@ -125,6 +167,9 @@ function renderTopbar(string $title, string $sub = ''): void { ?>
             <div class="topbar-title"><?= htmlspecialchars($title) ?></div>
             <?php if ($sub): ?><div class="topbar-sub"><?= htmlspecialchars($sub) ?></div><?php endif; ?>
         </div>
+    </div>
+    <div class="topbar-center">
+        <a href="/medbot/logout.php" class="btn btn-danger signout-big" aria-label="Sign out">⎋ Sign out</a>
     </div>
     <div class="topbar-right">
         <div class="robot-status" style="margin-bottom:0;padding:7px 14px" id="topbar-robot-status">
