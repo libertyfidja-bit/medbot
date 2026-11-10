@@ -1,10 +1,13 @@
 <?php
 require_once 'connect.php';
 require_once 'layout.php';
+require_once __DIR__ . '/billing_lib.php';
 
 $me   = auth_user();
 $role = $me['role'];
 $db   = getDB();
+meds_boot($db);
+meds_tick($db);     // marks doses that are 2+ hours late as missed and tells the nurse who released them
 
 function home_count(mysqli $db, string $sql): int {
     $r = $db->query($sql);
@@ -21,6 +24,7 @@ $robotMove = home_count($db, "SELECT COUNT(*) FROM robot_missions WHERE status =
 $alerts    = home_count($db, 'SELECT COUNT(*) FROM interaction_alerts WHERE resolved = 0');
 $pending   = home_count($db, "SELECT COUNT(*) FROM dose_schedule WHERE scheduled_date = CURDATE() AND status = 'pending'");
 $missed    = home_count($db, "SELECT COUNT(*) FROM dose_schedule WHERE scheduled_date = CURDATE() AND status = 'missed'");
+$missed   += home_count($db, "SELECT COUNT(*) FROM med_doses WHERE status = 'missed' AND due_at >= '" . meds_now()->format('Y-m-d') . " 00:00:00'");
 $unread    = home_count($db, 'SELECT COUNT(*) FROM messages WHERE to_user = ' . (int) $me['id'] . ' AND read_at IS NULL');
 $payReview = home_count($db, "SELECT COUNT(*) FROM payments WHERE status = 'pending' OR (payer_check = 'mismatch' AND confirmed_at > (NOW() - INTERVAL 7 DAY))");
 

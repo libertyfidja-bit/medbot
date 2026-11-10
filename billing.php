@@ -8,11 +8,35 @@ auth_start_session();
 $db = getDB();
 auth_ensure_tables($db);
 bill_boot($db);
+meds_boot($db);
+meds_tick($db);
 $myId   = (int) $me['id'];
 $isAdmin = $me['role'] === 'admin';
 $staff  = bill_staff($db);
 $staffById = [];
 foreach ($staff as $s) $staffById[(int) $s['id']] = $s;
+
+/** The form a doctor or nurse fills in to release medicines and start the patient's dose reminders. */
+function bill_release_form(array $v, array $pending, string $csrf, bool $override): string {
+    $h = '<form method="post" action="billing.php" style="margin-top:8px;display:grid;gap:8px;min-width:270px">'
+       . '<input type="hidden" name="csrf" value="' . auth_h($csrf) . '"><input type="hidden" name="action" value="release"><input type="hidden" name="invoice_id" value="' . (int) $v['id'] . '">';
+    if ($override) {
+        $h .= '<input type="hidden" name="override" value="1"><input name="reason" type="text" maxlength="255" placeholder="Reason for releasing BEFORE payment" required>';
+    }
+    foreach ($pending as $it) {
+        $id = (int) $it['id'];
+        $h .= '<div style="border:1px solid var(--border);border-radius:8px;padding:8px;display:grid;gap:6px"><strong>' . auth_h($it['description']) . ' × ' . (int) $it['qty'] . '</strong>'
+            . '<input name="dose_text[' . $id . ']" type="text" maxlength="150" placeholder="Dose, e.g. 1 tablet" required>'
+            . '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><select name="times[' . $id . ']" aria-label="Times per day"><option value="1">1× a day</option><option value="2">2× a day</option><option value="3" selected>3× a day</option><option value="4">4× a day</option></select>'
+            . '<input name="days[' . $id . ']" type="number" min="1" max="60" value="5" aria-label="Days"></div>'
+            . '<input name="note[' . $id . ']" type="text" maxlength="255" placeholder="Instructions, e.g. after meals"></div>';
+    }
+    $h .= '<select name="handover" aria-label="How the patient receives the medicines">';
+    foreach (MEDS_HANDOVER as $k => $label) $h .= '<option value="' . auth_h($k) . '">' . auth_h($label) . '</option>';
+    $h .= '</select><label style="display:flex;gap:6px;align-items:center;font-size:12.5px"><input type="checkbox" name="first_now" value="1" checked style="width:auto"> The patient takes the first dose now</label>'
+        . '<button class="btn btn-teal btn-sm" type="submit">💊 Give order &amp; release</button></form>';
+    return $h;
+}
 
 function bill_money($v): ?int {
     $v = trim((string) $v);
@@ -97,14 +121,23 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                     );
                     if ($r === null) $allOk = false;
                 }
+                if ($allOk && $patAmt === 0) {
+                    auth_exec($db, "UPDATE invoices SET status = 'paid', paid_at = NOW() WHERE id = ?", 'i', [$invId]);
+                }
                 if ($allOk) {
                     $db->commit();
-                    $flash = ['type' => 'ok', 'msg' => 'Invoice #' . $invId . ' created for ' . $pt['name'] . ': total ' . bill_rwf($total) . ', insurance pays ' . bill_rwf($insAmt) . ' (' . rtrim(rtrim(number_format($cov['pct'], 2, '.', ''), '0'), '.') . '%), the patient pays ' . bill_rwf($patAmt) . '. The patient can now pay from their portal.'];
+                    $flash = ['type' => 'ok', 'msg' => 'Invoice #' . $invId . ' created for ' . $pt['name'] . ': total ' . bill_rwf($total) . ', insurance pays ' . bill_rwf($insAmt) . ' (' . rtrim(rtrim(number_format($cov['pct'], 2, '.', ''), '0'), '.') . '%), the patient pays ' . bill_rwf($patAmt) . '.' . ($patAmt === 0 ? ' Fully covered by insurance: you can release the medicines now.' : ' The patient can now pay from their portal.')];
                 } else {
                     $db->rollback();
                     $flash = ['type' => 'error', 'msg' => 'Could not save the invoice. Please try again.'];
                 }
             }
+        } elseif ($act === 'release') {
+            $invId    = (int) ($_POST['invoice_id'] ?? 0);
+            $override = !empty($_POST['override']) && in_array($me['role'], ['doctor', 'admin'], true);
+            [$okR, $msgR, $handoverR] = meds_release($db, $invId, $me, $_POST, $override, (string) ($_POST['reason'] ?? ''));
+            $flash = ['type' => $okR ? 'ok' : 'error', 'msg' => $msgR];
+            if ($okR && $handoverR === 'robot') $flash['robot'] = true;
         } elseif ($act === 'cancel') {
             $id  = (int) ($_POST['id'] ?? 0);
             $inv = auth_row($db, 'SELECT id, created_by, status FROM invoices WHERE id = ?', 'i', [$id]);
@@ -144,6 +177,13 @@ $res = $db->query('SELECT v.id, v.total_amount, v.insurance_amount, v.patient_am
                    FROM invoices v JOIN patients p ON p.id = v.patient_id LEFT JOIN users u ON u.id = v.created_by ORDER BY v.id DESC LIMIT 30');
 if ($res) { while ($r = $res->fetch_assoc()) $invoices[] = $r; $res->free(); }
 
+$medItems = [];
+if ($invoices) {
+    $ids = implode(',', array_map(fn($x) => (int) $x['id'], $invoices));
+    $res = $db->query("SELECT ii.id, ii.invoice_id, ii.description, ii.qty, mo.released_by_name, mo.dose_text FROM invoice_items ii LEFT JOIN med_orders mo ON mo.item_id = ii.id WHERE ii.kind = 'medication' AND ii.invoice_id IN (" . $ids . ') ORDER BY ii.id');
+    if ($res) { while ($r = $res->fetch_assoc()) $medItems[(int) $r['invoice_id']][] = $r; $res->free(); }
+}
+
 $jsPatients = [];
 foreach ($patients as $p) $jsPatients[(string) $p['id']] = ['ins' => $p['insurer_name'] ?: 'No insurance', 'pct' => $p['pct']];
 $staffOptions = '<option value="">— nobody —</option>';
@@ -158,7 +198,7 @@ renderTopbar('Billing', 'Consultation and medicine charges, with the insurance s
 <div class="page-content">
 
 <?php if ($flash): ?>
-    <div class="alert <?= $flash['type'] === 'ok' ? 'alert-success' : 'alert-error' ?>" role="status"><span class="alert-icon"><?= $flash['type'] === 'ok' ? '✅' : '⚠️' ?></span><div><?= auth_h($flash['msg']) ?></div></div>
+    <div class="alert <?= $flash['type'] === 'ok' ? 'alert-success' : 'alert-error' ?>" role="status"><span class="alert-icon"><?= $flash['type'] === 'ok' ? '✅' : '⚠️' ?></span><div><?= auth_h($flash['msg']) ?><?php if (!empty($flash['robot'])): ?><div style="margin-top:8px"><a class="btn btn-teal btn-sm" href="pathfinding.php">🤖 Send the robot now</a></div><?php endif; ?></div></div>
 <?php endif; ?>
 
     <div class="card">
@@ -216,9 +256,9 @@ renderTopbar('Billing', 'Consultation and medicine charges, with the insurance s
         <div class="card-header"><div class="card-title">📋 Recent invoices</div></div>
         <div class="table-wrap">
         <table class="dt">
-            <thead><tr><th>#</th><th>Patient</th><th>Total</th><th>Insurance</th><th>Patient pays</th><th>By</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>#</th><th>Patient</th><th>Total</th><th>Insurance</th><th>Patient pays</th><th>By</th><th>Status</th><th>Medicines</th><th></th></tr></thead>
             <tbody>
-            <?php if (!$invoices): ?><tr><td colspan="8" style="text-align:center;color:var(--text-3);padding:24px">No invoices yet.</td></tr><?php endif; ?>
+            <?php if (!$invoices): ?><tr><td colspan="9" style="text-align:center;color:var(--text-3);padding:24px">No invoices yet.</td></tr><?php endif; ?>
             <?php foreach ($invoices as $v): ?>
                 <tr>
                     <td>#<?= (int) $v['id'] ?></td>
@@ -228,6 +268,23 @@ renderTopbar('Billing', 'Consultation and medicine charges, with the insurance s
                     <td><strong style="color:var(--text-1)"><?= auth_h(bill_rwf((int) $v['patient_amount'])) ?></strong></td>
                     <td><?= auth_h($v['creator'] ?? '—') ?></td>
                     <td><span class="badge <?= $statusBadge[$v['status']] ?? 'badge-gray' ?>"><?= auth_h($v['status']) ?></span></td>
+                    <td style="min-width:240px">
+                        <?php
+                        $mi = $medItems[(int) $v['id']] ?? [];
+                        $left = array_values(array_filter($mi, fn($x) => $x['dose_text'] === null));
+                        if (!$mi): ?><span style="color:var(--text-3)">—</span><?php endif;
+                        foreach ($mi as $x): if ($x['dose_text'] !== null): ?>
+                            <div style="font-size:12.5px;color:var(--teal)">✅ <?= auth_h($x['description']) ?> — released by <?= auth_h($x['released_by_name'] ?? '') ?></div>
+                        <?php endif; endforeach;
+                        if ($left && $v['status'] === 'paid'): ?>
+                            <details><summary style="cursor:pointer;color:var(--accent);font-size:13px;font-weight:600">💊 Release medicines</summary><?= bill_release_form($v, $left, $csrf, false) ?></details>
+                        <?php elseif ($left && in_array($v['status'], ['unpaid', 'pending'], true)): ?>
+                            <div style="font-size:12.5px;color:var(--warning)">⏳ Waiting for payment</div>
+                            <?php if (in_array($me['role'], ['doctor', 'admin'], true)): ?>
+                                <details><summary style="cursor:pointer;color:var(--danger);font-size:12.5px">Emergency: release before payment</summary><?= bill_release_form($v, $left, $csrf, true) ?></details>
+                            <?php endif; ?>
+                        <?php endif; ?>
+                    </td>
                     <td>
                         <?php if ($v['status'] === 'unpaid' && ($isAdmin || (int) $v['created_by'] === $myId)): ?>
                             <form method="post" action="billing.php" onsubmit="return confirm('Cancel this invoice?')"><input type="hidden" name="csrf" value="<?= auth_h($csrf) ?>"><input type="hidden" name="action" value="cancel"><input type="hidden" name="id" value="<?= (int) $v['id'] ?>"><button class="btn btn-danger btn-xs" type="submit">Cancel</button></form>

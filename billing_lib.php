@@ -283,3 +283,163 @@ function bill_fail_payment(mysqli $db, int $paymentId, string $reason): void {
     auth_exec($db, "UPDATE payments SET status = 'failed', failure_note = ? WHERE id = ? AND status = 'pending'", 'si', [mb_substr($reason, 0, 200), $paymentId]);
     auth_exec($db, "UPDATE invoices SET status = 'unpaid' WHERE id = ? AND status = 'pending'", 'i', [(int) $pay['invoice_id']]);
 }
+
+/* ───────────── medicines: release after payment, dose schedule, reminders ───────────── */
+
+const MEDS_HANDOVER = [
+    'nurse'    => 'A nurse hands the medicines to the patient',
+    'pharmacy' => 'The patient collects them at the pharmacy',
+    'robot'    => 'The robot brings them to the patient’s room',
+];
+
+/** Current time in Rwanda. Dose times are stored in Rwandan local time (no time zone conversion needed). */
+function meds_now(): DateTimeImmutable {
+    return new DateTimeImmutable('now', new DateTimeZone('Africa/Kigali'));
+}
+
+function meds_boot(mysqli $db): void {
+    $probe = $db->query('SELECT 1 FROM med_doses LIMIT 1');
+    if ($probe) { $probe->free(); return; }
+    $db->query("CREATE TABLE IF NOT EXISTS med_orders (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        invoice_id INT NOT NULL,
+        item_id INT NOT NULL,
+        patient_id INT NOT NULL,
+        medication VARCHAR(200) NOT NULL,
+        qty INT NOT NULL DEFAULT 1,
+        dose_text VARCHAR(150) NOT NULL,
+        times_per_day TINYINT NOT NULL DEFAULT 1,
+        days SMALLINT NOT NULL DEFAULT 1,
+        instructions VARCHAR(255) NULL,
+        handover ENUM('nurse','pharmacy','robot') NOT NULL DEFAULT 'nurse',
+        released_by INT NULL,
+        released_by_name VARCHAR(150) NULL,
+        override_reason VARCHAR(255) NULL,
+        released_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_order_item (item_id),
+        KEY idx_order_patient (patient_id)
+    )");
+    $db->query("CREATE TABLE IF NOT EXISTS med_doses (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        order_id INT NOT NULL,
+        patient_id INT NOT NULL,
+        due_at DATETIME NOT NULL,
+        status ENUM('pending','taken','missed') NOT NULL DEFAULT 'pending',
+        taken_at DATETIME NULL,
+        KEY idx_dose_patient (patient_id, due_at),
+        KEY idx_dose_order (order_id)
+    )");
+}
+
+/** Dose times for a course. Optionally starts with a dose right now. Returns 'Y-m-d H:i:s' strings. */
+function meds_generate_doses(DateTimeImmutable $now, int $perDay, int $days, bool $firstNow): array {
+    $presets = [1 => ['08:00'], 2 => ['08:00', '20:00'], 3 => ['08:00', '14:00', '20:00'], 4 => ['06:00', '12:00', '18:00', '22:00']];
+    $times = $presets[$perDay] ?? $presets[1];
+    $out = [];
+    if ($firstNow) $out[] = $now->format('Y-m-d H:i:00');
+    for ($d = 0; $d < $days; $d++) {
+        $day = $now->modify('+' . $d . ' day')->format('Y-m-d');
+        foreach ($times as $t) {
+            $due = new DateTimeImmutable($day . ' ' . $t . ':00', $now->getTimezone());
+            if ($due <= $now->modify('+30 minutes')) continue;        // already past
+            $out[] = $due->format('Y-m-d H:i:s');
+        }
+    }
+    $out = array_values(array_unique($out));
+    sort($out);
+    return array_slice($out, 0, $perDay * $days);                      // the course is perDay × days doses
+}
+
+/**
+ * Releases the medicines of a PAID invoice: records the order, creates the dose schedule and tells the
+ * patient (they see it, with reminders, in their portal). A doctor or admin may release before payment
+ * in an emergency ($override) with a written reason; the admins are told.
+ * $in is the submitted form. Returns [ok, message, handover].
+ */
+function meds_release(mysqli $db, int $invoiceId, array $me, array $in, bool $override, string $reason): array {
+    $inv = auth_row($db, 'SELECT i.id, i.patient_id, i.status, p.name AS patient_name FROM invoices i JOIN patients p ON p.id = i.patient_id WHERE i.id = ?', 'i', [$invoiceId]);
+    if (!$inv) return [false, 'Invoice not found.', ''];
+    if ($inv['status'] === 'cancelled') return [false, 'This invoice was cancelled.', ''];
+    $reason = mb_substr(trim(strip_tags($reason)), 0, 255);
+    if ($inv['status'] !== 'paid') {
+        if (!$override) return [false, 'Medicines can only be released after the payment is confirmed.', ''];
+        if (mb_strlen($reason) < 5) return [false, 'Write the reason for releasing before payment (at least 5 characters).', ''];
+    }
+
+    $handover = (string) ($in['handover'] ?? 'nurse');
+    if (!isset(MEDS_HANDOVER[$handover])) $handover = 'nurse';
+    $firstNow = !empty($in['first_now']);
+
+    $items = [];
+    $res = $db->query('SELECT ii.id, ii.description, ii.qty FROM invoice_items ii LEFT JOIN med_orders mo ON mo.item_id = ii.id WHERE ii.invoice_id = ' . (int) $invoiceId . " AND ii.kind = 'medication' AND mo.id IS NULL ORDER BY ii.id");
+    if ($res) { while ($r = $res->fetch_assoc()) $items[] = $r; $res->free(); }
+    if (!$items) return [false, 'There are no medicines left to release on this invoice.', ''];
+
+    $plans = [];
+    foreach ($items as $it) {
+        $id    = (int) $it['id'];
+        $dose  = mb_substr(trim(strip_tags((string) (($in['dose_text'] ?? [])[$id] ?? ''))), 0, 150);
+        $per   = (int) (($in['times'] ?? [])[$id] ?? 0);
+        $days  = (int) (($in['days'] ?? [])[$id] ?? 0);
+        $note  = mb_substr(trim(strip_tags((string) (($in['note'] ?? [])[$id] ?? ''))), 0, 255);
+        if ($dose === '') return [false, 'Write the dose for “' . $it['description'] . '” (for example: 1 tablet).', ''];
+        if ($per < 1 || $per > 4) return [false, 'Times per day for “' . $it['description'] . '” must be 1 to 4.', ''];
+        if ($days < 1 || $days > 60) return [false, 'Days for “' . $it['description'] . '” must be 1 to 60.', ''];
+        $plans[] = [$it, $dose, $per, $days, $note];
+    }
+
+    $now = meds_now();
+    $by  = (int) $me['id'] > 0 ? (int) $me['id'] : null;
+    $db->begin_transaction();
+    $ok = true;
+    $totalDoses = 0;
+    foreach ($plans as [$it, $dose, $per, $days, $note]) {
+        $n = auth_exec(
+            $db,
+            'INSERT INTO med_orders (invoice_id, item_id, patient_id, medication, qty, dose_text, times_per_day, days, instructions, handover, released_by, released_by_name, override_reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'iiisisiississ',
+            [$invoiceId, (int) $it['id'], (int) $inv['patient_id'], $it['description'], (int) $it['qty'], $dose, $per, $days, $note, $handover, $by, $me['full_name'], $inv['status'] === 'paid' ? '' : $reason]
+        );
+        $orderId = (int) $db->insert_id;
+        if (!$n || $orderId <= 0) { $ok = false; break; }
+        foreach (meds_generate_doses($now, $per, $days, $firstNow) as $due) {
+            if (auth_exec($db, 'INSERT INTO med_doses (order_id, patient_id, due_at) VALUES (?,?,?)', 'iis', [$orderId, (int) $inv['patient_id'], $due]) === null) { $ok = false; break 2; }
+            $totalDoses++;
+        }
+    }
+    if (!$ok) { $db->rollback(); return [false, 'Could not save the release. Please try again.', '']; }
+    $db->commit();
+
+    if ($inv['status'] !== 'paid') {
+        $ar = $db->query("SELECT id FROM users WHERE role = 'admin' AND active = 1");
+        if ($ar) {
+            while ($a = $ar->fetch_assoc()) {
+                msg_send($db, $by, (int) $a['id'], '⚠ Medicines released before payment — ' . $inv['patient_name'],
+                    $me['full_name'] . ' released medicines on invoice #' . $invoiceId . " before the payment was confirmed.\nReason: " . $reason, $invoiceId, null, true);
+            }
+            $ar->free();
+        }
+    }
+    return [true, 'Released ' . count($plans) . ' medicine(s) for ' . $inv['patient_name'] . ' with ' . $totalDoses . ' reminder(s). ' . MEDS_HANDOVER[$handover] . '.', $handover];
+}
+
+/** Marks doses that are more than 2 hours late as missed and tells the staff member who released them. */
+function meds_tick(mysqli $db): void {
+    $cut = meds_now()->modify('-120 minutes')->format('Y-m-d H:i:s');
+    $rows = [];
+    $stmt = $db->prepare("SELECT d.id, d.due_at, o.medication, o.released_by, p.name AS patient_name FROM med_doses d JOIN med_orders o ON o.id = d.order_id JOIN patients p ON p.id = d.patient_id WHERE d.status = 'pending' AND d.due_at < ? ORDER BY d.id LIMIT 50");
+    if (!$stmt) return;
+    $stmt->bind_param('s', $cut);
+    if ($stmt->execute()) {
+        $r = $stmt->get_result();
+        while ($r && ($row = $r->fetch_assoc())) $rows[] = $row;
+    }
+    $stmt->close();
+    foreach ($rows as $row) {
+        $n = auth_exec($db, "UPDATE med_doses SET status = 'missed' WHERE id = ? AND status = 'pending'", 'i', [(int) $row['id']]);
+        if ($n && $row['released_by'] !== null) {
+            msg_send($db, null, (int) $row['released_by'], 'Missed dose — ' . $row['patient_name'],
+                $row['patient_name'] . ' did not take ' . $row['medication'] . ' due at ' . substr((string) $row['due_at'], 11, 5) . '. Please check on the patient.', null, null, true);
+        }
+    }
+}

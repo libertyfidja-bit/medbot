@@ -59,6 +59,21 @@ body{background:var(--bg-0)}
 .pt-paygo input{font-size:18px;padding:12px}
 .pt-paygo .go{background:linear-gradient(135deg,#00d4aa,#00b894);color:#0a0a0f;border:none;font-weight:800;font-size:16px}
 .pt-wait{margin-top:10px;font-size:13.5px;color:var(--text-1)}
+.pt-due{margin:0 0 14px;padding:16px;border-radius:16px;background:rgba(255,169,77,.14);border:2px solid var(--warning);color:var(--text-1);animation:ptPulse 1.6s infinite}
+@keyframes ptPulse{0%,100%{box-shadow:0 0 0 0 rgba(255,169,77,.5)}50%{box-shadow:0 0 0 10px rgba(255,169,77,0)}}
+.pt-due h3{margin:0 0 6px;font-size:17px}
+.pt-due .med{font-size:20px;font-weight:800}
+.pt-due .btns{display:grid;gap:8px;margin-top:12px}
+.pt-due button{min-height:54px;border-radius:12px;border:none;font:inherit;font-weight:800;font-size:16px;cursor:pointer}
+.pt-order{padding:14px 16px;border-bottom:1px solid var(--border);font-size:14px;color:var(--text-2)}
+.pt-order:last-child{border-bottom:0}
+.pt-order .m{font-size:16px;font-weight:700;color:var(--text-1)}
+.pt-order .h{margin-top:6px;padding:6px 10px;border-radius:8px;background:rgba(124,109,255,.12);color:var(--text-1);font-size:13px}
+.pt-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.pt-chip{padding:4px 9px;border-radius:999px;font-size:12px;font-family:var(--mono);border:1px solid var(--border-grey);color:var(--text-2)}
+.pt-chip.taken{border-color:rgba(0,212,170,.5);color:var(--teal)}
+.pt-chip.missed{border-color:rgba(255,77,109,.5);color:var(--danger)}
+.pt-chip.due{border-color:var(--warning);color:var(--warning);font-weight:700}
 .pt-toast{position:fixed;left:12px;right:12px;bottom:20px;z-index:500;background:var(--bg-2);border:1px solid var(--border-accent);border-radius:12px;padding:14px 16px;color:var(--text-1);font-size:14.5px;box-shadow:var(--shadow-lg);display:none}
 </style>
 <script>window.MEDBOT_ROLE = "patient"; window.MEDBOT_USER = <?= json_encode($user['full_name'], $jsonFlags) ?>;</script>
@@ -77,6 +92,8 @@ body{background:var(--bg-0)}
         </div>
     </div>
 
+    <div id="pt-due" class="pt-due" role="alert" hidden></div>
+
     <button type="button" class="pt-big pt-voice" id="btn-voice" data-i="tell"></button>
     <button type="button" class="pt-big pt-sos" id="btn-sos" data-i="call"></button>
 
@@ -86,6 +103,12 @@ body{background:var(--bg-0)}
         <h2 data-i="medsTitle"></h2>
         <div id="pt-next" class="pt-next" hidden></div>
         <div id="pt-doses"></div>
+    </div>
+
+    <div class="pt-card">
+        <h2 data-i="cmTitle"></h2>
+        <div id="pt-cm"></div>
+        <div style="padding:10px 16px"><button type="button" class="pt-took" id="btn-notif" style="background:var(--bg-3);color:var(--text-1);width:100%"></button></div>
     </div>
 
     <div class="pt-card">
@@ -120,6 +143,7 @@ body{background:var(--bg-0)}
     // Interface texts. The Kinyarwanda block is a DRAFT: please have a Kinyarwanda speaker check it.
     var T = {
         en: { hello: 'Hello', signOut: 'Sign out', password: 'Change password',
+            cmTitle: '💊 Medicines from the care team', cmNone: 'No medicines have been released to you yet.', hnurse: 'A nurse will hand your medicines to you.', hpharmacy: 'Collect your medicines at the pharmacy.', hrobot: 'The robot will bring your medicines to your room.', dueNow: '⏰ Time to take your medicine', snooze: 'Remind me in 10 min', enableNotif: '🔔 Turn on reminders on this phone', notifOn: '🔔 Reminders are on', dTaken: 'Taken', dMissed: 'Missed', late: 'late by', course: '{n}× a day for {d} days', instr: 'How to take it', notifBody: 'Take {med} — {dose}',
             payTitle: '💳 Pay for my care', payNone: 'Nothing to pay right now.', invTotal: 'Total', invIns: 'Paid by insurance', invYou: 'You pay', payWith: 'Pay with', mtn: 'MTN Mobile Money', airtel: 'Airtel Money', card: 'Card', cash: 'Cash at the cashier', phoneLbl: 'Mobile money number', payNow: 'Pay', back: 'Back', st_unpaid: 'To pay', st_pending: 'Waiting for confirmation', st_paid: 'Paid ✓', payWait: 'Waiting for the payment to be confirmed. Approve it on your phone if you are asked.', cashWait: 'Go to the cashier with this reference:', cancelPay: 'Cancel this payment', sandboxNote: 'Test mode: no real money is charged.', signOutBig: '⎋ Sign out of this phone',
             tell: '🎙️ Tell the care team how you feel', call: '🚨 Call a nurse now', confirmCall: 'Alert the nurses now?', sosSent: '🚨 The nurses have been alerted.',
             medsTitle: '💊 My medicines today', noMeds: 'No medicines are planned for today.', took: '✅ I took it', thanks: 'Thank you. It was recorded.',
@@ -127,6 +151,7 @@ body{background:var(--bg-0)}
             next: 'Next medicine', at: 'at', msgTitle: '💬 Messages from the care team', noMsgs: 'No messages yet.', repTitle: '🩺 What I told the care team', noReps: 'You have not sent anything yet.',
             sNew: 'Sent', sAck: 'Seen by staff', sDone: 'Closed', now: 'just now', m: ' min ago', h: ' h ago', d: ' d ago', loadFail: 'Could not load your information. Please try again.', by: 'From' },
         fr: { hello: 'Bonjour', signOut: 'Se déconnecter', password: 'Changer le mot de passe',
+            cmTitle: '💊 Médicaments de l’équipe soignante', cmNone: 'Aucun médicament ne vous a encore été remis.', hnurse: 'Une infirmière vous remettra vos médicaments.', hpharmacy: 'Récupérez vos médicaments à la pharmacie.', hrobot: 'Le robot apportera vos médicaments dans votre chambre.', dueNow: '⏰ C’est l’heure de prendre votre médicament', snooze: 'Me rappeler dans 10 min', enableNotif: '🔔 Activer les rappels sur ce téléphone', notifOn: '🔔 Rappels activés', dTaken: 'Pris', dMissed: 'Manqué', late: 'en retard de', course: '{n}× par jour pendant {d} jours', instr: 'Comment le prendre', notifBody: 'Prenez {med} — {dose}',
             payTitle: '💳 Payer mes soins', payNone: 'Rien à payer pour le moment.', invTotal: 'Total', invIns: 'Pris en charge par l’assurance', invYou: 'Vous payez', payWith: 'Payer avec', mtn: 'MTN Mobile Money', airtel: 'Airtel Money', card: 'Carte', cash: 'Espèces à la caisse', phoneLbl: 'Numéro Mobile Money', payNow: 'Payer', back: 'Retour', st_unpaid: 'À payer', st_pending: 'En attente de confirmation', st_paid: 'Payé ✓', payWait: 'En attente de confirmation du paiement. Approuvez-le sur votre téléphone si on vous le demande.', cashWait: 'Allez à la caisse avec cette référence :', cancelPay: 'Annuler ce paiement', sandboxNote: 'Mode test : aucun argent réel n’est débité.', signOutBig: '⎋ Se déconnecter de ce téléphone',
             tell: '🎙️ Dire à l’équipe comment je me sens', call: '🚨 Appeler une infirmière', confirmCall: 'Alerter les infirmières maintenant ?', sosSent: '🚨 Les infirmières ont été alertées.',
             medsTitle: '💊 Mes médicaments aujourd’hui', noMeds: 'Aucun médicament prévu aujourd’hui.', took: '✅ Je l’ai pris', thanks: 'Merci. C’est enregistré.',
@@ -134,6 +159,7 @@ body{background:var(--bg-0)}
             next: 'Prochain médicament', at: 'à', msgTitle: '💬 Messages de l’équipe soignante', noMsgs: 'Aucun message pour le moment.', repTitle: '🩺 Ce que j’ai dit à l’équipe', noReps: 'Vous n’avez encore rien envoyé.',
             sNew: 'Envoyé', sAck: 'Vu par le personnel', sDone: 'Clôturé', now: 'à l’instant', m: ' min', h: ' h', d: ' j', loadFail: 'Impossible de charger vos informations. Réessayez.', by: 'De' },
         rw: { hello: 'Muraho', signOut: 'Sohoka', password: 'Hindura ijambo ry’ibanga',
+            cmTitle: '💊 Imiti wahawe n’abaganga', cmNone: 'Nta miti urahabwa.', hnurse: 'Umuforomo azaguha imiti yawe.', hpharmacy: 'Jya gufata imiti yawe muri farumasi.', hrobot: 'Robo izakuzanira imiti mu cyumba cyawe.', dueNow: '⏰ Igihe cyo kunywa umuti', snooze: 'Unyibutse nyuma y’iminota 10', enableNotif: '🔔 Fungura ibyibutsa kuri iyi telefoni', notifOn: '🔔 Ibyibutsa birakora', dTaken: 'Yanyowe', dMissed: 'Ntiyanyowe', late: 'yatinze iminota', course: '{n}× ku munsi mu minsi {d}', instr: 'Uko unywa', notifBody: 'Nywa {med} — {dose}',
             payTitle: '💳 Kwishyura serivisi y’ubuvuzi', payNone: 'Nta cyo wishyura ubu.', invTotal: 'Yose hamwe', invIns: 'Byishyurwa n’ubwishingizi', invYou: 'Ugomba kwishyura', payWith: 'Ishyura ukoresheje', mtn: 'MTN Mobile Money', airtel: 'Airtel Money', card: 'Ikarita', cash: 'Amafaranga kuri kasiye', phoneLbl: 'Nimero ya Mobile Money', payNow: 'Ishyura', back: 'Subira inyuma', st_unpaid: 'Hakwiye kwishyurwa', st_pending: 'Dutegereje kwemeza', st_paid: 'Byishyuwe ✓', payWait: 'Dutegereje ko kwishyura kwemezwa. Emeza kuri telefoni yawe nibabikubaza.', cashWait: 'Jya kwa kasiye ufite iyi nimero:', cancelPay: 'Hagarika kwishyura', sandboxNote: 'Uburyo bwo kugerageza: nta mafaranga nyayo akurwaho.', signOutBig: '⎋ Sohoka kuri iyi telefoni',
             tell: '🎙️ Bwira abaganga uko wumva umeze', call: '🚨 Hamagara umuforomo ubu', confirmCall: 'Menyesha abaforomo ubu?', sosSent: '🚨 Abaforomo bamenyeshejwe.',
             medsTitle: '💊 Imiti yanjye uyu munsi', noMeds: 'Nta miti iteganyijwe uyu munsi.', took: '✅ Nayinyweye', thanks: 'Murakoze. Byanditswe.',
@@ -169,6 +195,7 @@ body{background:var(--bg-0)}
 
     function render() {
         renderPay();
+        renderCm();
         if (!data) return;
         $('pt-name').textContent = data.name || '';
         var doses = data.schedule || [];
@@ -251,6 +278,105 @@ body{background:var(--bg-0)}
             applyLang();
         });
     });
+
+    // ───── Medicines from the care team and reminders ─────
+    var cm = { orders: [], doses: [], serverMs: 0, fetchedAt: 0, snoozed: {}, alerted: {} };
+    var cmTimer = null;
+    function fill(str, v) { return String(str).replace(/\{(\w+)\}/g, function (m, k) { return v[k] != null ? v[k] : m; }); }
+    function parseLocal(s) { var m = /^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d)/.exec(s || ''); return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]).getTime() : 0; }
+    function nowEst() { return cm.serverMs + (Date.now() - cm.fetchedAt); }
+    function hhmm(s) { return String(s).slice(11, 16); }
+    function dueDoses() { var n = nowEst(); return cm.doses.filter(function (d) { return d.status === 'pending' && parseLocal(d.due_at) <= n; }); }
+
+    function renderCm() {
+        var box = $('pt-cm'); if (!box) return;
+        var n = nowEst();
+        box.innerHTML = cm.orders.length ? cm.orders.map(function (o) {
+            var doses = cm.doses.filter(function (d) { return d.order_id === o.id; });
+            var chips = doses.map(function (d) {
+                var cls = d.status === 'taken' ? 'taken' : d.status === 'missed' ? 'missed' : (parseLocal(d.due_at) <= n ? 'due' : '');
+                var mark = d.status === 'taken' ? ' ✓' : d.status === 'missed' ? ' ✗' : '';
+                return '<span class="pt-chip ' + cls + '">' + esc(String(d.due_at).slice(5, 10).replace('-', '/') + ' ' + hhmm(d.due_at) + mark) + '</span>';
+            }).join('');
+            return '<div class="pt-order"><div class="m">' + esc(o.medication) + ' — ' + esc(o.dose_text) + '</div>' +
+                '<div>' + esc(fill(t('course'), { n: o.times_per_day, d: o.days })) + (o.instructions ? ' · ' + esc(o.instructions) : '') + '</div>' +
+                '<div class="h">' + esc(t('h' + o.handover)) + '</div>' + (chips ? '<div class="pt-chips">' + chips + '</div>' : '') + '</div>';
+        }).join('') : '<div class="pt-empty">' + esc(t('cmNone')) + '</div>';
+
+        var b = $('btn-notif');
+        if (b) {
+            var on = ('Notification' in window) && Notification.permission === 'granted';
+            b.textContent = on ? t('notifOn') : t('enableNotif');
+            b.disabled = on || !('Notification' in window);
+        }
+    }
+
+    function beep() {
+        try {
+            var C = window.AudioContext || window.webkitAudioContext; if (!C) return;
+            var ctx = new C(), o = ctx.createOscillator(), g = ctx.createGain();
+            o.connect(g); g.connect(ctx.destination); o.frequency.value = 880; g.gain.value = 0.15;
+            o.start(); setTimeout(function () { o.frequency.value = 660; }, 220); setTimeout(function () { o.stop(); ctx.close(); }, 480);
+        } catch (e) { /* sound not allowed yet */ }
+        try { if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]); } catch (e) { /* ignore */ }
+    }
+
+    function checkDue() {
+        var box = $('pt-due'); if (!box) return;
+        var now = Date.now();
+        var due = dueDoses().filter(function (d) { return !(cm.snoozed[d.id] && cm.snoozed[d.id] > now); });
+        if (!due.length) { box.hidden = true; if (document.title.indexOf('⏰') === 0) document.title = 'MedBot — My health'; return; }
+        var d = due[0];
+        var late = Math.max(0, Math.round((nowEst() - parseLocal(d.due_at)) / 60000));
+        box.hidden = false;
+        box.innerHTML = '<h3>' + esc(t('dueNow')) + '</h3><div class="med">' + esc(d.medication) + ' — ' + esc(d.dose_text) + '</div>' +
+            '<div style="font-size:13px;margin-top:4px">' + esc(hhmm(d.due_at)) + (late > 1 ? ' · ' + esc(t('late')) + ' ' + late + ' min' : '') + (due.length > 1 ? ' (+' + (due.length - 1) + ')' : '') + '</div>' +
+            '<div class="btns"><button type="button" style="background:linear-gradient(135deg,#00d4aa,#00b894);color:#0a0a0f" data-take="' + d.id + '">' + esc(t('took')) + '</button>' +
+            '<button type="button" style="background:var(--bg-3);color:var(--text-1)" data-snooze="' + d.id + '">' + esc(t('snooze')) + '</button></div>';
+        document.title = '⏰ ' + d.medication;
+        // alert (sound, vibration, notification) now and again every 10 minutes until it is taken
+        if (!cm.alerted[d.id] || now - cm.alerted[d.id] > 600000) {
+            cm.alerted[d.id] = now;
+            beep();
+            try {
+                if ('Notification' in window && Notification.permission === 'granted') new Notification('MedBot', { body: fill(t('notifBody'), { med: d.medication, dose: d.dose_text }), tag: 'dose-' + d.id });
+            } catch (e) { /* ignore */ }
+        }
+    }
+
+    async function loadCm() {
+        clearTimeout(cmTimer);
+        try {
+            var res = await fetch('/medbot/api/me.php?action=meds', { cache: 'no-store' });
+            var j = await res.json();
+            if (res.status === 401) { location.href = 'login.php'; return; }
+            if (res.ok && !j.error) { cm.orders = j.orders || []; cm.doses = j.doses || []; cm.serverMs = parseLocal(j.now); cm.fetchedAt = Date.now(); }
+        } catch (e) { /* try again later */ }
+        renderCm(); checkDue();
+        cmTimer = setTimeout(loadCm, 30000);
+    }
+
+    async function takeDose(id) {
+        try {
+            var res = await fetch('/medbot/api/me.php', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'dose_taken', dose_id: id }) });
+            var j = await res.json();
+            if (!res.ok || j.error) throw new Error(j.message || 'HTTP ' + res.status);
+            toast(t('thanks'));
+        } catch (err) { toast(err.message); }
+        loadCm();
+    }
+
+    $('pt-due').addEventListener('click', function (e) {
+        var b = e.target.closest('button'); if (!b) return;
+        if (b.dataset.take) takeDose(parseInt(b.dataset.take, 10));
+        else if (b.dataset.snooze) { cm.snoozed[b.dataset.snooze] = Date.now() + 600000; checkDue(); }
+    });
+    $('btn-notif').addEventListener('click', async function () {
+        try { if ('Notification' in window) await Notification.requestPermission(); } catch (e) { /* ignore */ }
+        beep();     // also unlocks sound on this phone
+        renderCm();
+    });
+    setInterval(function () { if (cm.fetchedAt) { checkDue(); } }, 15000);
 
     // ───── Paying for care ─────
     var pay = { invoices: [], phone: '', mode: 'sandbox', pick: null, draft: '' };
@@ -343,6 +469,7 @@ body{background:var(--bg-0)}
     applyLang();
     load();
     loadPay();
+    loadCm();
     setInterval(load, 30000);
 })();
 </script>
