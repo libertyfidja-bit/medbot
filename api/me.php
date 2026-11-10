@@ -4,13 +4,16 @@
  *
  *   GET  ?action=overview   -> name, today's doses, own symptom reports and staff replies
  *   GET  ?action=schedule   -> today's doses only (used by the voice assistant)
- *   POST {action:"taken", dose_id}  -> "I took it"
+ *   POST {action:"taken", dose_id}  -> "I took it" (prescription doses)
+ *   GET  ?action=meds        -> medicines released by the care team, with dose times and reminders
+ *   POST {action:"dose_taken", dose_id} -> "I took it" for a released medicine
  *
  * Only users with the patient role can open this file (see auth_allowed in auth.php),
  * and every query is tied to the patient record linked to the signed-in account.
  */
 require_once __DIR__ . '/../connect.php';
 require_once __DIR__ . '/../auth.php';
+require_once __DIR__ . '/../billing_lib.php';
 mysqli_report(MYSQLI_REPORT_OFF);
 header('Cache-Control: no-store');
 
@@ -99,6 +102,52 @@ try {
                 'schedule' => today_doses($db, $pid),
                 'reports'  => $reports,
             ]);
+        }
+
+        case 'meds': {
+            meds_boot($db);
+            meds_tick($db);
+            $now  = meds_now();
+            $from = $now->modify('-24 hours')->format('Y-m-d H:i:s');
+            $to   = $now->modify('+24 hours')->format('Y-m-d H:i:s');
+
+            $orders = [];
+            $stmt = $db->prepare('SELECT id, medication, qty, dose_text, times_per_day, days, instructions, handover, released_by_name FROM med_orders WHERE patient_id = ? ORDER BY id DESC LIMIT 20');
+            if ($stmt) {
+                $stmt->bind_param('i', $pid);
+                if ($stmt->execute()) {
+                    $r = $stmt->get_result();
+                    while ($r && ($row = $r->fetch_assoc())) $orders[] = $row;
+                }
+                $stmt->close();
+            }
+            $doses = [];
+            $stmt = $db->prepare('SELECT d.id, d.order_id, d.due_at, d.status, d.taken_at, o.medication, o.dose_text FROM med_doses d JOIN med_orders o ON o.id = d.order_id WHERE d.patient_id = ? AND d.due_at BETWEEN ? AND ? ORDER BY d.due_at LIMIT 80');
+            if ($stmt) {
+                $stmt->bind_param('iss', $pid, $from, $to);
+                if ($stmt->execute()) {
+                    $r = $stmt->get_result();
+                    while ($r && ($row = $r->fetch_assoc())) { $row['id'] = (int) $row['id']; $doses[] = $row; }
+                }
+                $stmt->close();
+            }
+            jsonResponse(['error' => false, 'now' => $now->format('Y-m-d H:i:s'), 'orders' => $orders, 'doses' => $doses]);
+        }
+
+        case 'dose_taken': {
+            if ($method !== 'POST') fail('POST required.', 405);
+            meds_boot($db);
+            $doseId = (int) ($in['dose_id'] ?? 0);
+            $dose = auth_row($db, 'SELECT id, status, due_at FROM med_doses WHERE id = ? AND patient_id = ?', 'ii', [$doseId, $pid]);
+            if (!$dose) fail('That dose was not found.', 404);
+            if ($dose['status'] !== 'pending') fail('That dose is already recorded as ' . $dose['status'] . '.', 409);
+            $now = meds_now();
+            if ($dose['due_at'] > $now->modify('+60 minutes')->format('Y-m-d H:i:s')) {
+                fail('It is too early for this dose. It is due at ' . substr((string) $dose['due_at'], 11, 5) . '.', 409);
+            }
+            $n = auth_exec($db, "UPDATE med_doses SET status = 'taken', taken_at = ? WHERE id = ? AND status = 'pending'", 'si', [$now->format('Y-m-d H:i:s'), $doseId]);
+            if (!$n) fail('Could not save. Please try again.', 500);
+            jsonResponse(['error' => false]);
         }
 
         case 'taken': {
